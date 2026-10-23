@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Режим малыша</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Режим малыша">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#26335F">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Rubik:wght@500;600&display=swap">
+<style>
+/* Layout: one narrow phone column. A state-coloured card on top (amber while awake, dusk blue while asleep),
+   one big action button, then the day as a list of segments; settings sit on a second tab. */
+:root {
+  --bg: #ECEFF5;
+  --surface: #FFFFFF;
+  --ink: #172039;
+  --muted: #5A647E;
+  --line: #D7DDE9;
+  --tint: #EEF1FA;
+  --day-bg: #FBE2A0;
+  --day-fg: #3B2A04;
+  --night-bg: #26335F;
+  --night-fg: #E9EEFF;
+  --warn-day: #A93A07;
+  --warn-night: #FFB38A;
+  --focus: #3A57D1;
+  --act-sleep: #26335F;
+  --act-sleep-fg: #FFFFFF;
+  --act-wake: #F2B33D;
+  --act-wake-fg: #2B1F03;
+  --f-body: 'Onest', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --f-num: 'Rubik', 'Onest', system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0D1222; --surface: #161D33; --ink: #E7EBF7; --muted: #9AA6C4; --line: #283152; --tint: #1E2746;
+    --day-bg: #4B3B14; --day-fg: #FFE9B8; --night-bg: #1F2B55; --night-fg: #E3E9FF;
+    --warn-day: #FF9A62; --warn-night: #FFB38A; --focus: #8FA2FF;
+    --act-sleep: #5368CC; --act-sleep-fg: #FFFFFF; --act-wake: #F2B33D; --act-wake-fg: #2B1F03;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0D1222; --surface: #161D33; --ink: #E7EBF7; --muted: #9AA6C4; --line: #283152; --tint: #1E2746;
+  --day-bg: #4B3B14; --day-fg: #FFE9B8; --night-bg: #1F2B55; --night-fg: #E3E9FF;
+  --warn-day: #FF9A62; --warn-night: #FFB38A; --focus: #8FA2FF;
+  --act-sleep: #5368CC; --act-sleep-fg: #FFFFFF; --act-wake: #F2B33D; --act-wake-fg: #2B1F03;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 16px;
+  line-height: 1.4;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px 32px;
+  -webkit-text-size-adjust: 100%;
+}
+button, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.num { font-variant-numeric: tabular-nums; }
+
+.wrap { max-width: 520px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+
+/* header + tabs */
+.top { display: flex; flex-direction: column; gap: 12px; }
+.title-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+h1 { margin: 0; font-family: var(--f-num); font-weight: 600; font-size: 20px; letter-spacing: -0.01em; }
+.date { color: var(--muted); font-size: 14px; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.tab { min-height: 40px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-weight: 500; }
+.tab[aria-selected="true"] { background: var(--ink); color: var(--bg); }
+
+.notice { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: 14px; }
+
+/* hero */
+.hero { position: relative; overflow: hidden; border-radius: 18px; padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 4px; }
+.hero.day { background: var(--day-bg); color: var(--day-fg); --warn: var(--warn-day); --track: rgba(0,0,0,.14); }
+.hero.night { background: var(--night-bg); color: var(--night-fg); --warn: var(--warn-night); --track: rgba(255,255,255,.2); }
+.hero.start { background: var(--surface); border: 1px solid var(--line); }
+.deco { position: absolute; right: -14px; top: -14px; width: 120px; height: 120px; opacity: .13; pointer-events: none; }
+.tag { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.tag svg { width: 18px; height: 18px; }
+.label { margin-top: 10px; font-size: 15px; opacity: .85; }
+.big { font-family: var(--f-num); font-weight: 600; font-size: clamp(40px, 13vw, 58px); line-height: 1.05; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.big.warn { color: var(--warn); }
+.target { margin-top: 2px; font-size: 18px; font-weight: 600; }
+.bar { margin-top: 14px; height: 8px; border-radius: 99px; background: var(--track); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 99px; background: currentColor; }
+.bar > i.warn { background: var(--warn); }
+@media (prefers-reduced-motion: no-preference) { .bar > i { transition: width .6s ease; } }
+.barlbl { display: flex; justify-content: space-between; margin-top: 6px; font-size: 13px; opacity: .85; font-variant-numeric: tabular-nums; }
+.nudge { margin-top: 12px; font-size: 14px; }
+.nudge-b { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 6px; }
+.nudge-b button { min-height: 44px; padding: 0; border-radius: 10px; background: transparent; border: 1.5px solid currentColor; font-weight: 500; font-variant-numeric: tabular-nums; }
+.nudge-r { margin-top: 6px; min-height: 36px; padding: 0; border: 0; background: transparent; color: inherit; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; }
+.meta { margin-top: 12px; font-size: 14px; opacity: .85; }
+.hint { font-size: 14px; opacity: .85; }
+
+.time-in { margin-top: 8px; width: 100%; min-height: 64px; padding: 0 14px; font-family: var(--f-num); font-weight: 600; font-size: 40px; letter-spacing: -0.02em; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--ink); font-variant-numeric: tabular-nums; }
+.err { min-height: 0; color: var(--warn-day); font-size: 14px; }
+.hero.start .err, .editor .err { color: var(--warn-day); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .hero.start .err, :root:not([data-theme="light"]) .editor .err { color: var(--warn-day); } }
+
+/* action */
+.actions { display: flex; flex-direction: column; gap: 8px; }
+.act { width: 100%; min-height: 68px; border: 0; border-radius: 16px; font-family: var(--f-num); font-weight: 600; font-size: 24px; letter-spacing: -0.01em; }
+.act.sleep { background: var(--act-sleep); color: var(--act-sleep-fg); }
+.act.wake { background: var(--act-wake); color: var(--act-wake-fg); }
+.act:active { transform: scale(.985); }
+.link { align-self: center; min-height: 40px; padding: 0 12px; border: 0; background: transparent; color: var(--muted); font-size: 14px; text-decoration: underline; text-underline-offset: 3px; }
+
+/* generic buttons */
+.btn { min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); font-weight: 500; }
+.btn.primary { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.btn:disabled { opacity: .4; cursor: default; }
+
+/* editor */
+.editor { padding: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; gap: 10px; }
+.ed-t { font-weight: 600; }
+.ed-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ed-row input { min-height: 44px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* timeline */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 4px 16px 6px; }
+.card-h { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 0 8px; flex-wrap: wrap; }
+.card-h h2 { margin: 0; font-family: var(--f-num); font-size: 16px; font-weight: 600; }
+.card-h span { color: var(--muted); font-size: 13px; }
+.rows { list-style: none; margin: 0; padding: 0; }
+.row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px 0; border-top: 1px solid var(--line); }
+.row.current { margin: 0 -16px; padding: 11px 16px; background: var(--tint); border-top-color: transparent; }
+.row.current + .row { border-top-color: transparent; }
+.mark { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; }
+.mark svg { width: 18px; height: 18px; }
+.mark.awake { background: var(--day-bg); color: var(--day-fg); }
+.mark.sleep { background: var(--night-bg); color: var(--night-fg); }
+.row.planned .mark { background: transparent; border: 1.5px dashed var(--line); color: var(--muted); }
+.rtitle { font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row.done .rtitle { font-weight: 500; }
+.pill { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; padding: 2px 8px; border-radius: 99px; background: var(--ink); color: var(--bg); }
+.pill.warn { background: var(--warn-day); color: #fff; }
+.rtime { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.rtime .est { color: var(--muted); }
+.tbtn { padding: 6px 1px; min-height: 30px; border: 0; background: transparent; color: var(--ink); font-weight: 500; border-bottom: 1px dotted var(--muted); border-radius: 0; font-variant-numeric: tabular-nums; }
+.rdur { text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rdur small { display: block; color: var(--muted); font-size: 12px; }
+.empty { padding: 12px 0 14px; color: var(--muted); font-size: 14px; }
+
+.foot { display: flex; justify-content: center; }
+
+/* settings */
+.set-note { margin: 0; color: var(--muted); font-size: 14px; }
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid var(--line); }
+.sl { font-weight: 500; }
+.sh { color: var(--muted); font-size: 13px; }
+.pair { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.pair select { min-height: 44px; padding: 0 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); font-variant-numeric: tabular-nums; }
+.set-btns { display: flex; gap: 8px; flex-wrap: wrap; padding: 6px 0 8px; }
+.sum { padding: 10px 0 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+
+/* archive */
+.avg { padding: 12px 14px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: 14px; }
+.avg b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.axis { position: relative; height: 16px; margin: 0 17px -6px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.axis span { position: absolute; transform: translateX(-50%); }
+.days { display: flex; flex-direction: column; gap: 10px; }
+.day { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.day > summary { list-style: none; cursor: pointer; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.day > summary::-webkit-details-marker { display: none; }
+.day-h { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
+.day-h b { font-weight: 600; }
+.day-h span { color: var(--muted); font-size: 13px; }
+.sbar { position: relative; height: 14px; border-radius: 99px; background: var(--night-bg); overflow: hidden; }
+.sbar i { position: absolute; top: 0; bottom: 0; background: var(--day-bg); border-radius: 99px; }
+.sbar u { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.22); }
+.day-s { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.day-d { list-style: none; margin: 0; padding: 0 16px 6px; }
+.day-d .row { grid-template-columns: minmax(0, 1fr) auto; padding: 9px 0; }
+
+html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { margin: 0; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" fill="currentColor"/></symbol>
+</svg>
+
+<div class="wrap">
+  <header class="top">
+    <div class="title-row"><h1>Режим малыша</h1><span class="date" id="dateLine"></span></div>
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" id="tab-today" data-act="tab" data-v="today" aria-selected="true">Сегодня</button>
+      <button class="tab" role="tab" id="tab-set" data-act="tab" data-v="set" aria-selected="false">Режим</button>
+      <button class="tab" role="tab" id="tab-arc" data-act="tab" data-v="arc" aria-selected="false">Архив</button>
+    </div>
+  </header>
+
+  <main id="todayView" class="wrap" style="max-width:none">
+    <div class="notice" id="notice">
+      <span>Сейчас стоят примерные значения. Задайте свой режим.</span>
+      <button class="btn" data-act="tab" data-v="set">Задать режим</button>
+    </div>
+    <div id="hero"></div>
+    <div class="actions">
+      <button class="act wake" id="act" data-act="press"></button>
+      <button class="link" id="undo" data-act="undo">Нажали по ошибке? Отменить последнее</button>
+    </div>
+    <div class="editor" id="editor" hidden></div>
+    <section class="card" id="timeline" aria-label="День"></section>
+    <div class="foot"><button class="link" id="reset" data-act="reset">Сбросить день</button></div>
+  </main>
+
+  <section id="setView" class="wrap" style="max-width:none" hidden>
+    <p class="set-note">Укажите, сколько малыш бодрствует перед каждым сном и сколько спит. После последнего бодрствования начинается ночной сон. Изменения сразу пересчитывают сегодняшний день.</p>
+    <div class="card">
+      <div id="setRows"></div>
+      <div class="set-btns">
+        <button class="btn" id="addNap" data-act="add-nap">Добавить дневной сон</button>
+        <button class="btn" id="delNap" data-act="del-nap">Убрать последний сон</button>
+      </div>
+      <div class="sum" id="sum"></div>
+    </div>
+  </section>
+  <section id="arcView" class="wrap" style="max-width:none" hidden>
+    <p class="set-note">Дни за последние две недели. День попадает сюда, когда утром вы нажимаете «Проснулся — новый день». Нажмите на день, чтобы увидеть подробности.</p>
+    <div class="avg" id="arcAvg" hidden></div>
+    <div class="axis" id="arcAxis" hidden></div>
+    <div class="days" id="arcList"></div>
+  </section>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var KEY = 'rezhim-malysha-v1';
+  var MIN = 60000;
+  var S = { win: [150, 180, 210], nap: [90, 90], custom: false };
+  var ST = { events: [], over: {} };
+  var AR = [];
+  var DAY = 86400000, AX0 = 5, AX1 = 23;
+  var view = 'today', editing = null, startHM = null, resetArmed = false, resetTimer = null;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  var hm = function (ts) { var d = new Date(ts); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+  function fmtMin(m) {
+    m = Math.round(m);
+    if (m <= 0) return '0 мин';
+    var h = Math.floor(m / 60), r = m % 60;
+    if (!h) return r + ' мин';
+    if (!r) return h + ' ч';
+    return h + ' ч ' + r + ' мин';
+  }
+  var fmtMs = function (ms) { return fmtMin(ms / MIN); };
+  var fmtCeil = function (ms) { return fmtMin(Math.ceil(ms / MIN)); };
+  function tsFromHM(v, baseTs) {
+    var m = /^(\d{1,2}):(\d{2})/.exec(v || '');
+    if (!m) return null;
+    var d = new Date(baseTs);
+    d.setHours(+m[1], +m[2], 0, 0);
+    return d.getTime();
+  }
+
+  /* ---------- storage ---------- */
+  function load() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (!raw) return;
+      var o = JSON.parse(raw);
+      if (o && o.S && Array.isArray(o.S.win) && o.S.win.length >= 2 && o.S.win.length <= 5) {
+        var win = o.S.win.map(Number).filter(function (n) { return n >= 5; });
+        if (win.length === o.S.win.length) {
+          S.win = win;
+          S.nap = (Array.isArray(o.S.nap) ? o.S.nap : []).map(Number).filter(function (n) { return n >= 5; }).slice(0, win.length - 1);
+          while (S.nap.length < win.length - 1) S.nap.push(90);
+          S.custom = !!o.S.custom;
+        }
+      }
+      if (o && o.ST && Array.isArray(o.ST.events)) {
+        ST.events = o.ST.events.map(Number).filter(Number.isFinite);
+        ST.over = (o.ST.over && typeof o.ST.over === 'object') ? o.ST.over : {};
+      }
+      if (o && Array.isArray(o.AR)) {
+        AR = o.AR.filter(function (e) { return e && Array.isArray(e.ev) && e.ev.length >= 2 && Array.isArray(e.win) && Array.isArray(e.nap); });
+        pruneAR();
+      }
+    } catch (e) {}
+  }
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify({ S: S, ST: ST, AR: AR })); } catch (e) {}
+  }
+
+  /* ---------- the schedule ----------
+     Segments in order: awake 1, nap 1, awake 2, nap 2, ..., awake N, night.
+     Segment s starts at event s (even events = woke up, odd = fell asleep).
+     Logged events are facts; everything after the last one is planned from it. */
+  function rowsFor(ev, cfg, over) {
+    cfg = cfg || S; over = over || ST.over;
+    var N = cfg.win.length, rows = [], cursor = ev[0];
+    for (var s = 0; s < 2 * N; s++) {
+      var night = s === 2 * N - 1;
+      var type = night ? 'night' : (s % 2 === 0 ? 'awake' : 'nap');
+      var idx = Math.floor(s / 2);
+      var base = night ? 0 : (type === 'awake' ? cfg.win[idx] : cfg.nap[idx]);
+      var dur = night ? null : Math.max(5, base + (over[s] || 0));
+      var startLogged = s < ev.length;
+      var start = startLogged ? ev[s] : cursor;
+      var end = null, endLogged = false;
+      if (!night) {
+        endLogged = s + 1 < ev.length;
+        end = endLogged ? ev[s + 1] : start + dur * MIN;
+      }
+      rows.push({ s: s, type: type, idx: idx, base: base, dur: dur, start: start, end: end, startLogged: startLogged, endLogged: endLogged });
+      cursor = end;
+    }
+    return rows;
+  }
+  function curInfo() {
+    var ev = ST.events, N = S.win.length;
+    if (!ev.length) return null;
+    var rows = rowsFor(ev), cs = Math.min(ev.length - 1, 2 * N - 1);
+    return { rows: rows, cs: cs, cur: rows[cs] };
+  }
+
+  /* ---------- hero ---------- */
+  function icon(id) { return '<svg aria-hidden="true"><use href="#' + id + '"/></svg>'; }
+
+  function renderHero() {
+    var el = $('hero'), info = curInfo(), now = Date.now();
+    if (!info) {
+      if (startHM == null) startHM = hm(now);
+      el.innerHTML =
+        '<section class="hero start">' +
+        '<div class="tag">Новый день</div>' +
+        '<label class="label" for="startTime">Во сколько малыш проснулся?</label>' +
+        '<input class="time-in" type="time" id="startTime" value="' + startHM + '">' +
+        '<div class="err" id="startErr" role="alert"></div>' +
+        '<div class="meta" style="opacity:1;color:var(--muted)">План ниже пересчитывается по этому времени.</div>' +
+        '</section>';
+      return;
+    }
+    var rows = info.rows, cur = info.cur, next = rows[info.cs + 1], after = rows[info.cs + 2];
+    var asleep = cur.type !== 'awake';
+    var tag, label, big, warn = false, target = '', meta = '', hint = '', showBar = true;
+
+    if (cur.type === 'awake') {
+      var rem = cur.end - now, toNight = next && next.type === 'night';
+      tag = 'Бодрствует';
+      if (rem >= 0) { label = toNight ? 'До ночного сна' : 'До сна'; big = fmtCeil(rem); }
+      else { label = 'Время сна прошло'; big = '+' + fmtMs(-rem); warn = true; }
+      target = (toNight ? 'Ночной сон в ' : 'Уложить в ') + hm(cur.end);
+      meta = 'Проснулся в ' + hm(cur.start) + ' · бодрствует ' + fmtMs(now - cur.start);
+      if (next && next.type === 'nap') hint = 'Дальше сон: ' + hm(next.start) + ' – ' + hm(next.end);
+    } else if (cur.type === 'nap') {
+      var rem2 = cur.end - now;
+      tag = 'Спит';
+      if (rem2 >= 0) { label = 'До подъёма'; big = fmtCeil(rem2); }
+      else { label = 'Сон дольше плана'; big = '+' + fmtMs(-rem2); warn = true; }
+      target = 'Будить в ' + hm(cur.end);
+      meta = 'Уснул в ' + hm(cur.start) + ' · спит ' + fmtMs(now - cur.start);
+      if (next && next.end) hint = (after && after.type === 'night' ? 'Ночной сон ≈ ' : 'Следующий сон ≈ ') + hm(next.end);
+    } else {
+      tag = 'Ночной сон';
+      label = 'Уснул в';
+      big = hm(cur.start);
+      meta = 'Спит ' + fmtMs(now - cur.start);
+      showBar = false;
+    }
+
+    var html = '<section class="hero ' + (asleep ? 'night' : 'day') + '">' +
+      '<svg class="deco" aria-hidden="true"><use href="#' + (asleep ? 'i-moon' : 'i-sun') + '"/></svg>' +
+      '<div class="tag">' + icon(asleep ? 'i-moon' : 'i-sun') + tag + '</div>' +
+      '<div class="label">' + label + '</div>' +
+      '<div class="big' + (warn ? ' warn' : '') + '">' + big + '</div>';
+    if (target) html += '<div class="target">' + target + '</div>';
+    if (showBar) {
+      var pct = Math.max(0, Math.min(1, (now - cur.start) / (cur.end - cur.start))) * 100;
+      html += '<div class="bar"><i class="' + (warn ? 'warn' : '') + '" style="width:' + pct.toFixed(1) + '%"></i></div>' +
+        '<div class="barlbl"><span>' + hm(cur.start) + '</span><span>' + hm(cur.end) + '</span></div>' +
+        '<div class="nudge"><span>Сдвинуть время, минут:</span><div class="nudge-b">' +
+        [-15, -5, -1, 1, 5, 15].map(function (d) { return '<button data-act="nudge" data-d="' + d + '">' + (d < 0 ? '−' : '+') + Math.abs(d) + '</button>'; }).join('') +
+        '</div>' + (ST.over[cur.s] ? '<button class="nudge-r" data-act="nudge-reset">Сдвиг ' + (ST.over[cur.s] > 0 ? '+' : '−') + Math.abs(ST.over[cur.s]) + ' мин. Вернуть по плану</button>' : '') + '</div>';
+    }
+    html += '<div class="meta">' + meta + '</div>';
+    if (hint) html += '<div class="hint">' + hint + '</div>';
+    html += '</section>';
+    el.innerHTML = html;
+  }
+
+  function renderAct() {
+    var info = curInfo(), b = $('act'), cls, txt;
+    if (!info) { cls = 'wake'; txt = 'Проснулся — начать день'; }
+    else if (info.cur.type === 'awake') { cls = 'sleep'; txt = 'Уснул'; }
+    else if (info.cur.type === 'nap') { cls = 'wake'; txt = 'Проснулся'; }
+    else { cls = 'wake'; txt = 'Проснулся — новый день'; }
+    b.className = 'act ' + cls;
+    b.textContent = txt;
+    $('undo').hidden = !info;
+    $('reset').hidden = !info;
+  }
+
+  /* ---------- timeline ---------- */
+  function renderTimeline() {
+    var el = $('timeline'), ev = ST.events, now = Date.now(), preview = !ev.length, rows, head;
+    if (preview) {
+      var ts = tsFromHM(startHM, now);
+      if (ts == null) {
+        el.innerHTML = '<div class="card-h"><h2>План на день</h2></div><div class="empty">Укажите время подъёма, чтобы увидеть план.</div>';
+        return;
+      }
+      rows = rowsFor([ts]);
+      head = '<h2>План на день</h2><span>подъём в ' + hm(ts) + '</span>';
+    } else {
+      rows = rowsFor(ev);
+      head = '<h2>День</h2><span>отмеченное и план</span>';
+    }
+    var html = '<div class="card-h">' + head + '</div><ul class="rows">';
+    rows.forEach(function (r) {
+      var status = preview ? 'planned' : (r.type === 'night' ? (r.startLogged ? 'current' : 'planned') : (r.endLogged ? 'done' : (r.startLogged ? 'current' : 'planned')));
+      var title = r.type === 'awake' ? 'Бодрствование ' + (r.idx + 1) : (r.type === 'nap' ? 'Сон ' + (r.idx + 1) : 'Ночной сон');
+      var overdue = status === 'current' && r.type !== 'night' && now > r.end;
+      var canEdit = !preview;
+      function t(ts, logged, evIdx) {
+        if (logged && canEdit) return '<button class="tbtn" data-act="edit" data-ev="' + evIdx + '" aria-label="Изменить время ' + hm(ts) + '">' + hm(ts) + '</button>';
+        if (logged) return hm(ts);
+        return '<span class="est">≈' + hm(ts) + '</span>';
+      }
+      var times;
+      if (r.type === 'night') times = (r.startLogged ? 'с ' : 'с ≈') + (r.startLogged ? t(r.start, true, r.s) : hm(r.start));
+      else times = t(r.start, r.startLogged, r.s) + ' – ' + t(r.end, r.endLogged, r.s + 1);
+      var dur = '';
+      if (r.type !== 'night') {
+        if (status === 'done') {
+          var actual = (r.end - r.start) / MIN, diff = Math.round(actual - r.dur);
+          dur = fmtMin(actual) + (Math.abs(diff) >= 5 ? '<small>' + (diff > 0 ? '+' : '−') + fmtMin(Math.abs(diff)) + ' к плану</small>' : '');
+        } else {
+          dur = fmtMin(r.dur) + (status === 'current' ? '<small>по плану</small>' : '');
+        }
+      }
+      var pill = status === 'current' ? '<span class="pill' + (overdue ? ' warn' : '') + '">' + (overdue ? 'дольше плана' : 'сейчас') + '</span>' : '';
+      html += '<li class="row ' + status + '">' +
+        '<span class="mark ' + (r.type === 'awake' ? 'awake' : 'sleep') + '">' + icon(r.type === 'awake' ? 'i-sun' : 'i-moon') + '</span>' +
+        '<div><div class="rtitle">' + title + pill + '</div><div class="rtime">' + times + '</div></div>' +
+        '<div class="rdur">' + dur + '</div></li>';
+    });
+    html += '</ul>';
+    el.innerHTML = html;
+  }
+
+  /* ---------- time editor ---------- */
+  function renderEditor() {
+    var el = $('editor');
+    if (editing == null || editing >= ST.events.length) { el.hidden = true; el.innerHTML = ''; editing = null; return; }
+    var name = editing % 2 === 0 ? 'Проснулся' : 'Уснул';
+    el.hidden = false;
+    el.innerHTML = '<div class="ed-t">' + name + ': изменить время</div>' +
+      '<div class="ed-row"><input type="time" id="editTime" value="' + hm(ST.events[editing]) + '">' +
+      '<button class="btn primary" data-act="edit-save">Сохранить</button>' +
+      '<button class="btn" data-act="edit-cancel">Отмена</button></div>' +
+      '<div class="err" id="editErr" role="alert"></div>';
+  }
+  function saveEdit() {
+    var i = editing, ev = ST.events, v = $('editTime').value, day = 86400000, now = Date.now();
+    var prev = i > 0 ? ev[i - 1] : -Infinity;
+    var next = i < ev.length - 1 ? ev[i + 1] : now + MIN;
+    var offs = i > 0 ? [0, -day, day] : [0], found = null;
+    for (var k = 0; k < offs.length; k++) {
+      var c = tsFromHM(v, ev[i] + offs[k]);
+      if (c != null && c > prev && c < next) { found = c; break; }
+    }
+    if (found == null) {
+      var msg = 'Подойдёт время';
+      if (i > 0) msg += ' после ' + hm(prev);
+      msg += i < ev.length - 1 ? (i > 0 ? ' и' : '') + ' до ' + hm(next) : (i > 0 ? ' и' : '') + ' не позже текущего';
+      $('editErr').textContent = msg + '.';
+      return;
+    }
+    if (i === 0 && AR.length && AR[0].nightEnd === ev[0]) AR[0].nightEnd = found;
+    ev[i] = found;
+    editing = null;
+    save();
+    renderToday();
+  }
+
+  /* ---------- actions ---------- */
+  function press() {
+    var now = Date.now(), N = S.win.length, ev = ST.events;
+    if (!ev.length) {
+      var inp = $('startTime');
+      var ts = inp ? tsFromHM(inp.value, now) : null;
+      if (ts == null || ts > now + MIN) { $('startErr').textContent = 'Укажите время подъёма, не позже текущего.'; return; }
+      ST = { events: [ts], over: {} };
+      startHM = null;
+    } else if (ev.length >= 2 * N) {
+      AR.unshift({ ev: ev.slice(0, 2 * N), over: ST.over, nightEnd: now, win: S.win.slice(), nap: S.nap.slice() });
+      pruneAR();
+      ST = { events: [now], over: {} };
+    } else {
+      ev.push(Math.max(now, ev[ev.length - 1]));
+    }
+    editing = null;
+    save();
+    renderToday();
+  }
+  function undo() {
+    if (!ST.events.length) return;
+    if (ST.events.length === 1 && AR.length && AR[0].nightEnd === ST.events[0]) {
+      var back = AR.shift();
+      ST = { events: back.ev.slice(), over: back.over || {} };
+      editing = null; save(); renderToday();
+      return;
+    }
+    ST.events.pop();
+    delete ST.over[ST.events.length];
+    if (!ST.events.length) { ST.over = {}; startHM = null; }
+    editing = null;
+    save();
+    renderToday();
+  }
+  function nudge(d) {
+    var info = curInfo();
+    if (!info || info.cur.type === 'night') return;
+    var s = info.cur.s, base = info.cur.base;
+    var o = (ST.over[s] || 0) + d;
+    if (base + o < 5) o = 5 - base;
+    ST.over[s] = o;
+    save();
+    renderToday();
+  }
+  function nudgeReset() {
+    var info = curInfo();
+    if (!info) return;
+    delete ST.over[info.cur.s];
+    save();
+    renderToday();
+  }
+  function resetDay() {
+    if (!resetArmed) {
+      resetArmed = true;
+      $('reset').textContent = 'Точно сбросить? Нажмите ещё раз';
+      clearTimeout(resetTimer);
+      resetTimer = setTimeout(function () { resetArmed = false; $('reset').textContent = 'Сбросить день'; }, 4000);
+      return;
+    }
+    clearTimeout(resetTimer);
+    resetArmed = false;
+    $('reset').textContent = 'Сбросить день';
+    ST = { events: [], over: {} };
+    startHM = null; editing = null;
+    save();
+    renderToday();
+  }
+
+  /* ---------- settings ---------- */
+  function setRow(k, i, label, min, maxH) {
+    var hh = Math.min(maxH, Math.floor(min / 60)), mm = min % 60, ho = '', mo = '', x;
+    for (x = 0; x <= maxH; x++) ho += '<option value="' + x + '"' + (x === hh ? ' selected' : '') + '>' + x + '</option>';
+    var haveMm = false;
+    for (x = 0; x < 60; x++) { if (x === mm) haveMm = true; mo += '<option value="' + x + '"' + (x === mm ? ' selected' : '') + '>' + pad(x) + '</option>'; }
+    if (!haveMm) mo += '<option value="' + mm + '" selected>' + pad(mm) + '</option>';
+    return '<div class="set-row"><label class="sl" for="' + k + '-h-' + i + '">' + label + '</label>' +
+      '<div class="pair"><select id="' + k + '-h-' + i + '" data-k="' + k + '" data-i="' + i + '">' + ho + '</select><span>ч</span>' +
+      '<select id="' + k + '-m-' + i + '" data-k="' + k + '" data-i="' + i + '">' + mo + '</select><span>мин</span></div></div>';
+  }
+  function renderSettings() {
+    var N = S.win.length, h = '';
+    for (var i = 0; i < N; i++) {
+      h += setRow('w', i, 'Бодрствование ' + (i + 1), S.win[i], 8);
+      if (i < N - 1) h += setRow('n', i, 'Сон ' + (i + 1), S.nap[i], 4);
+    }
+    h += '<div class="set-row"><div><div class="sl">Ночной сон</div><div class="sh">начинается после последнего бодрствования</div></div></div>';
+    $('setRows').innerHTML = h;
+    $('addNap').disabled = N >= 5;
+    $('delNap').disabled = N <= 2;
+    renderSum();
+  }
+  function renderSum() {
+    var a = S.win.reduce(function (p, c) { return p + c; }, 0), n = S.nap.reduce(function (p, c) { return p + c; }, 0);
+    $('sum').textContent = 'Бодрствование за день: ' + fmtMin(a) + ' · дневной сон: ' + fmtMin(n) + ' · от подъёма до ночного сна: ' + fmtMin(a + n);
+  }
+  function onSelect(sel) {
+    var k = sel.dataset.k, i = +sel.dataset.i;
+    var total = (+$(k + '-h-' + i).value) * 60 + (+$(k + '-m-' + i).value);
+    var fix = false;
+    if (total < 5) { total = 5; fix = true; }
+    (k === 'w' ? S.win : S.nap)[i] = total;
+    S.custom = true;
+    save();
+    if (fix) renderSettings(); else renderSum();
+  }
+
+  /* ---------- archive ---------- */
+  function pruneAR() {
+    var cut = Date.now() - 14 * DAY;
+    AR = AR.filter(function (e) { return e.ev[0] >= cut; }).slice(0, 14);
+  }
+  function hmOfDay(m) { m = Math.round(m); return pad(Math.floor(m / 60) % 24) + ':' + pad(m % 60); }
+  function xPct(ts, d0) {
+    var h = (ts - d0) / 3600000;
+    return Math.max(0, Math.min(100, (h - AX0) / (AX1 - AX0) * 100));
+  }
+  function renderArchive() {
+    var list = $('arcList'), avg = $('arcAvg'), axis = $('arcAxis');
+    if (!AR.length) {
+      avg.hidden = true; axis.hidden = true;
+      list.innerHTML = '<div class="card"><div class="empty">Пока пусто. Первый день появится здесь утром, когда вы нажмёте «Проснулся — новый день» после ночного сна.</div></div>';
+      return;
+    }
+    var ticks = [6, 12, 18, 22];
+    axis.hidden = false;
+    axis.innerHTML = ticks.map(function (h) { return '<span style="left:' + ((h - AX0) / (AX1 - AX0) * 100).toFixed(1) + '%">' + h + '</span>'; }).join('');
+    var sumWake = 0, sumNight = 0, sumNap = 0, html = '';
+    AR.forEach(function (e) {
+      var N = e.win.length, rows = rowsFor(e.ev, { win: e.win, nap: e.nap }, {});
+      var d0 = new Date(e.ev[0]); d0.setHours(0, 0, 0, 0); d0 = d0.getTime();
+      var awake = 0, nap = 0, bars = '', det = '', night = rows[rows.length - 1];
+      rows.forEach(function (r) {
+        if (r.type === 'night') {
+          det += '<li class="row"><div><div class="rtitle">Ночной сон</div><div class="rtime">' + hm(r.start) + (e.nightEnd ? ' – ' + hm(e.nightEnd) : '') + '</div></div>' +
+            '<div class="rdur">' + (e.nightEnd ? fmtMs(e.nightEnd - r.start) : '') + '</div></li>';
+          return;
+        }
+        var d = r.end - r.start;
+        if (r.type === 'awake') {
+          awake += d;
+          var l = xPct(r.start, d0), w = xPct(r.end, d0) - l;
+          bars += '<i style="left:' + l.toFixed(2) + '%;width:' + w.toFixed(2) + '%"></i>';
+        } else nap += d;
+        det += '<li class="row"><div><div class="rtitle">' + (r.type === 'awake' ? 'Бодрствование ' : 'Сон ') + (r.idx + 1) + '</div>' +
+          '<div class="rtime">' + hm(r.start) + ' – ' + hm(r.end) + '</div></div><div class="rdur">' + fmtMs(d) + '</div></li>';
+      });
+      var ticksHtml = ticks.map(function (h) { return '<u style="left:' + ((h - AX0) / (AX1 - AX0) * 100).toFixed(1) + '%"></u>'; }).join('');
+      var ds = new Date(e.ev[0]).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' });
+      ds = ds.charAt(0).toUpperCase() + ds.slice(1);
+      sumWake += (e.ev[0] - d0) / MIN;
+      sumNight += (night.start - d0) / MIN;
+      sumNap += nap;
+      html += '<details class="day"><summary>' +
+        '<div class="day-h"><b>' + ds + '</b><span>дневной сон ' + fmtMs(nap) + '</span></div>' +
+        '<div class="sbar" role="img" aria-label="Бодрствование и сон за день">' + ticksHtml + bars + '</div>' +
+        '<div class="day-s">Подъём ' + hm(e.ev[0]) + ' · бодрствование ' + fmtMs(awake) + ' · ночной сон с ' + hm(night.start) + '</div>' +
+        '</summary><ul class="day-d">' + det + '</ul></details>';
+    });
+    var n = AR.length;
+    avg.hidden = false;
+    avg.innerHTML = 'В среднем за ' + n + ' ' + (n === 1 ? 'день' : (n < 5 ? 'дня' : 'дней')) + ': подъём <b>' + hmOfDay(sumWake / n) +
+      '</b> · ночной сон с <b>' + hmOfDay(sumNight / n) + '</b> · дневной сон <b>' + fmtMs(sumNap / n) + '</b>';
+    list.innerHTML = html;
+  }
+
+  /* ---------- glue ---------- */
+  function renderToday() {
+    $('notice').hidden = S.custom;
+    renderHero(); renderAct(); renderTimeline(); renderEditor();
+  }
+  function setView(v) {
+    view = v;
+    $('todayView').hidden = v !== 'today';
+    $('setView').hidden = v !== 'set';
+    $('arcView').hidden = v !== 'arc';
+    $('tab-today').setAttribute('aria-selected', String(v === 'today'));
+    $('tab-set').setAttribute('aria-selected', String(v === 'set'));
+    $('tab-arc').setAttribute('aria-selected', String(v === 'arc'));
+    if (v === 'today') renderToday(); else if (v === 'set') renderSettings(); else renderArchive();
+    window.scrollTo(0, 0);
+  }
+  function tick() {
+    if (view !== 'today' || !ST.events.length) return;
+    renderHero();
+    renderTimeline();
+  }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-act]');
+    if (!t) return;
+    switch (t.dataset.act) {
+      case 'tab': setView(t.dataset.v); break;
+      case 'press': press(); break;
+      case 'undo': undo(); break;
+      case 'nudge': nudge(+t.dataset.d); break;
+      case 'nudge-reset': nudgeReset(); break;
+      case 'reset': resetDay(); break;
+      case 'edit':
+        editing = +t.dataset.ev; renderEditor();
+        $('editor').scrollIntoView({ block: 'center', behavior: 'smooth' });
+        break;
+      case 'edit-save': saveEdit(); break;
+      case 'edit-cancel': editing = null; renderEditor(); break;
+      case 'add-nap':
+        if (S.win.length < 5) { S.win.push(180); S.nap.push(90); S.custom = true; save(); renderSettings(); }
+        break;
+      case 'del-nap':
+        if (S.win.length > 2) { S.win.pop(); S.nap.pop(); S.custom = true; save(); renderSettings(); }
+        break;
+    }
+  });
+  document.addEventListener('input', function (e) {
+    if (e.target.id === 'startTime') {
+      startHM = e.target.value;
+      var er = $('startErr'); if (er) er.textContent = '';
+      renderTimeline();
+    }
+  });
+  document.addEventListener('change', function (e) {
+    if (e.target.matches && e.target.matches('select[data-k]')) onSelect(e.target);
+  });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
+
+  load();
+  var dl = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+  $('dateLine').textContent = dl.charAt(0).toUpperCase() + dl.slice(1);
+  renderToday();
+  renderSettings();
+  setInterval(tick, 15000);
+})();
+</script>
+</body>
+</html>
