@@ -17,6 +17,7 @@
    one big action button, then the day as a list of segments; settings sit on a second tab. */
 :root {
   --bg: #ECEFF5;
+  --ok: #1E8A5A;
   --surface: #FFFFFF;
   --ink: #172039;
   --muted: #5A647E;
@@ -39,7 +40,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0D1222; --surface: #161D33; --ink: #E7EBF7; --muted: #9AA6C4; --line: #283152; --tint: #1E2746;
-    --day-bg: #4B3B14; --day-fg: #FFE9B8; --night-bg: #1F2B55; --night-fg: #E3E9FF;
+    --day-bg: #4B3B14; --day-fg: #FFE9B8; --night-bg: #1F2B55; --night-fg: #E3E9FF; --ok: #5FD39B;
     --warn-day: #FF9A62; --warn-night: #FFB38A; --focus: #8FA2FF;
     --act-sleep: #5368CC; --act-sleep-fg: #FFFFFF; --act-wake: #F2B33D; --act-wake-fg: #2B1F03;
     color-scheme: dark;
@@ -47,7 +48,7 @@
 }
 :root[data-theme="dark"] {
   --bg: #0D1222; --surface: #161D33; --ink: #E7EBF7; --muted: #9AA6C4; --line: #283152; --tint: #1E2746;
-  --day-bg: #4B3B14; --day-fg: #FFE9B8; --night-bg: #1F2B55; --night-fg: #E3E9FF;
+  --day-bg: #4B3B14; --day-fg: #FFE9B8; --night-bg: #1F2B55; --night-fg: #E3E9FF; --ok: #5FD39B;
   --warn-day: #FF9A62; --warn-night: #FFB38A; --focus: #8FA2FF;
   --act-sleep: #5368CC; --act-sleep-fg: #FFFFFF; --act-wake: #F2B33D; --act-wake-fg: #2B1F03;
   color-scheme: dark;
@@ -188,6 +189,14 @@ h1 { margin: 0; font-family: var(--f-num); font-weight: 600; font-size: 20px; le
 .day-d { list-style: none; margin: 0; padding: 0 16px 6px; }
 .day-d .row { grid-template-columns: minmax(0, 1fr) auto; padding: 9px 0; }
 
+/* sync */
+.date-col { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.syncchip { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.syncchip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.syncchip.ok::before { background: var(--ok); }
+.syncchip.offline::before, .syncchip.error::before { background: var(--warn-day); }
+.txt { width: 100%; min-height: 44px; margin: 6px 0 0; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); font-size: 16px; }
+.sync-p { margin: 0; padding: 4px 0 8px; color: var(--muted); font-size: 14px; }
 html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
 body { margin: 0; }
 </style>
@@ -201,7 +210,7 @@ body { margin: 0; }
 
 <div class="wrap">
   <header class="top">
-    <div class="title-row"><h1>Режим малыша</h1><span class="date" id="dateLine"></span></div>
+    <div class="title-row"><h1>Режим малыша</h1><div class="date-col"><span class="date" id="dateLine"></span><span class="syncchip" id="syncChip" hidden></span></div></div>
     <div class="tabs" role="tablist">
       <button class="tab" role="tab" id="tab-today" data-act="tab" data-v="today" aria-selected="true">Сегодня</button>
       <button class="tab" role="tab" id="tab-set" data-act="tab" data-v="set" aria-selected="false">Режим</button>
@@ -234,6 +243,10 @@ body { margin: 0; }
       </div>
       <div class="sum" id="sum"></div>
     </div>
+    <section class="card" id="syncCard" aria-label="Общий день на двоих">
+      <div class="card-h"><h2>Общий день на двоих</h2></div>
+      <div id="syncBody" style="padding-bottom:10px"></div>
+    </section>
   </section>
   <section id="arcView" class="wrap" style="max-width:none" hidden>
     <p class="set-note">Дни за последние две недели. День попадает сюда, когда утром вы нажимаете «Проснулся — новый день». Нажмите на день, чтобы увидеть подробности.</p>
@@ -251,6 +264,9 @@ body { margin: 0; }
   var S = { win: [150, 180, 210], nap: [90, 90], custom: false };
   var ST = { events: [], over: {} };
   var AR = [];
+  var SY = { cfg: null, dev: null, status: 'wait', dirty: false, inflight: false, es: null, lastRemoteRev: 0, seeded: false, offTimer: null, rev: 0 };
+  var SYNC_KEY = 'rezhim-malysha-sync-v1';
+  var pendingRender = false;
   var DAY = 86400000, AX0 = 5, AX1 = 23;
   var view = 'today', editing = null, startHM = null, resetArmed = false, resetTimer = null;
 
@@ -276,32 +292,34 @@ body { margin: 0; }
   }
 
   /* ---------- storage ---------- */
+  function ingest(o) {
+    if (!o) return;
+    if (o.S && Array.isArray(o.S.win) && o.S.win.length >= 2 && o.S.win.length <= 5) {
+      var win = o.S.win.map(Number).filter(function (n) { return n >= 5; });
+      if (win.length === o.S.win.length) {
+        S.win = win;
+        S.nap = (Array.isArray(o.S.nap) ? o.S.nap : []).map(Number).filter(function (n) { return n >= 5; }).slice(0, win.length - 1);
+        while (S.nap.length < win.length - 1) S.nap.push(90);
+        S.custom = !!o.S.custom;
+      }
+    }
+    if (o.ST && Array.isArray(o.ST.events)) {
+      ST = { events: o.ST.events.map(Number).filter(Number.isFinite), over: (o.ST.over && typeof o.ST.over === 'object') ? o.ST.over : {} };
+    }
+    if (Array.isArray(o.AR)) {
+      AR = o.AR.filter(function (e) { return e && Array.isArray(e.ev) && e.ev.length >= 2 && Array.isArray(e.win) && Array.isArray(e.nap); });
+      pruneAR();
+    }
+  }
   function load() {
-    try {
-      var raw = localStorage.getItem(KEY);
-      if (!raw) return;
-      var o = JSON.parse(raw);
-      if (o && o.S && Array.isArray(o.S.win) && o.S.win.length >= 2 && o.S.win.length <= 5) {
-        var win = o.S.win.map(Number).filter(function (n) { return n >= 5; });
-        if (win.length === o.S.win.length) {
-          S.win = win;
-          S.nap = (Array.isArray(o.S.nap) ? o.S.nap : []).map(Number).filter(function (n) { return n >= 5; }).slice(0, win.length - 1);
-          while (S.nap.length < win.length - 1) S.nap.push(90);
-          S.custom = !!o.S.custom;
-        }
-      }
-      if (o && o.ST && Array.isArray(o.ST.events)) {
-        ST.events = o.ST.events.map(Number).filter(Number.isFinite);
-        ST.over = (o.ST.over && typeof o.ST.over === 'object') ? o.ST.over : {};
-      }
-      if (o && Array.isArray(o.AR)) {
-        AR = o.AR.filter(function (e) { return e && Array.isArray(e.ev) && e.ev.length >= 2 && Array.isArray(e.win) && Array.isArray(e.nap); });
-        pruneAR();
-      }
-    } catch (e) {}
+    try { var raw = localStorage.getItem(KEY); if (raw) ingest(JSON.parse(raw)); } catch (e) {}
+  }
+  function persistLocal() {
+    try { localStorage.setItem(KEY, JSON.stringify({ S: S, ST: ST, AR: AR })); } catch (e) {}
   }
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify({ S: S, ST: ST, AR: AR })); } catch (e) {}
+    persistLocal();
+    if (SY.cfg) { SY.dirty = true; flush(); }
   }
 
   /* ---------- the schedule ----------
@@ -662,6 +680,187 @@ body { margin: 0; }
     list.innerHTML = html;
   }
 
+  /* ---------- sync (Firebase Realtime Database over REST) ---------- */
+  var ALPHA = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  function randStr(n) {
+    var out = '', buf = new Uint8Array(n);
+    try { crypto.getRandomValues(buf); } catch (e) { for (var k = 0; k < n; k++) buf[k] = Math.floor(Math.random() * 256); }
+    for (var i = 0; i < n; i++) out += ALPHA.charAt(buf[i] % ALPHA.length);
+    return out;
+  }
+  function saveCfg() {
+    try { localStorage.setItem(SYNC_KEY, JSON.stringify({ dev: SY.dev, url: SY.cfg ? SY.cfg.url : null, code: SY.cfg ? SY.cfg.code : null })); } catch (e) {}
+  }
+  function parseSync(str) {
+    if (!str) return null;
+    var m = /#sync=([^\s&]+)/.exec(str);
+    if (m) { try { str = decodeURIComponent(m[1]); } catch (e) { return null; } }
+    str = String(str).trim();
+    var host = str, code = null, i = str.indexOf('|');
+    if (i >= 0) {
+      host = str.slice(0, i);
+      code = str.slice(i + 1).trim().toLowerCase();
+      if (!/^[a-z0-9]{20,}$/.test(code)) return null;
+    }
+    host = host.trim().replace(/^https?:\/\//i, '').split('/')[0].toLowerCase();
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*\.(firebasedatabase\.app|firebaseio\.com)$/.test(host)) return null;
+    return { url: 'https://' + host, code: code };
+  }
+  function syncInit() {
+    try {
+      var o = JSON.parse(localStorage.getItem(SYNC_KEY) || 'null');
+      if (o && o.dev) SY.dev = o.dev;
+      if (o && o.url && o.code) SY.cfg = { url: o.url, code: o.code };
+    } catch (e) {}
+    if (!SY.dev) SY.dev = randStr(10);
+    if (!SY.cfg) {
+      var p = parseSync(location.hash || '');
+      if (p && p.code) SY.cfg = { url: p.url, code: p.code };
+    }
+    saveCfg();
+  }
+  var endpoint = function () { return SY.cfg.url + '/' + SY.cfg.code + '.json'; };
+  function codeStr() { return SY.cfg.url.replace(/^https:\/\//, '') + '|' + SY.cfg.code; }
+  function shareLink() { return location.origin + location.pathname + '#sync=' + encodeURIComponent(codeStr()); }
+
+  function setStatus(st) {
+    SY.status = st;
+    var c = $('syncChip');
+    if (!SY.cfg) { c.hidden = true; return; }
+    c.hidden = false;
+    c.className = 'syncchip ' + st;
+    c.textContent = st === 'ok' ? 'Общий день: синхронизировано' : st === 'offline' ? 'Нет связи, отправим позже' : st === 'error' ? 'Нет доступа к базе' : 'Подключаемся…';
+  }
+  function flush() {
+    if (!SY.cfg || !SY.dirty || SY.inflight) return;
+    SY.inflight = true; SY.dirty = false;
+    SY.rev = Math.max(Date.now(), SY.rev + 1);
+    var body = JSON.stringify({ rev: SY.rev, by: SY.dev, d: JSON.stringify({ S: S, ST: ST, AR: AR }) });
+    fetch(endpoint(), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: body })
+      .then(function (r) {
+        if (!r.ok) { var er = new Error('http'); er.status = r.status; throw er; }
+        SY.lastRemoteRev = SY.rev;
+        setStatus('ok');
+      })
+      .catch(function (er) { SY.dirty = true; setStatus(er && (er.status === 401 || er.status === 403) ? 'error' : 'offline'); })
+      .then(function () { SY.inflight = false; if (SY.dirty && SY.status === 'ok') flush(); });
+  }
+  function handleRemote(data) {
+    if (data == null) {
+      if (!SY.seeded) { SY.seeded = true; SY.dirty = true; flush(); }
+      return;
+    }
+    if (typeof data !== 'object' || typeof data.d !== 'string') return;
+    if (data.by === SY.dev) { SY.lastRemoteRev = data.rev; return; }
+    if (data.rev === SY.lastRemoteRev) return;
+    SY.lastRemoteRev = data.rev;
+    applyRemote(data.d);
+  }
+  function applyRemote(str) {
+    var o;
+    try { o = JSON.parse(str); } catch (e) { return; }
+    if (!o || !o.S || !o.ST) return;
+    ingest(o);
+    persistLocal();
+    if (editing != null && editing >= ST.events.length) editing = null;
+    var a = document.activeElement;
+    if (a && (a.tagName === 'INPUT' || a.tagName === 'SELECT')) { pendingRender = true; return; }
+    rerender();
+  }
+  function rerender() {
+    pendingRender = false;
+    if (view === 'today') renderToday(); else if (view === 'set') renderSettings(); else renderArchive();
+  }
+  function pull() {
+    if (!SY.cfg) return;
+    fetch(endpoint(), { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) { var er = new Error('http'); er.status = r.status; throw er; } return r.json(); })
+      .then(function (data) { setStatus('ok'); handleRemote(data); flush(); })
+      .catch(function (er) { setStatus(er && (er.status === 401 || er.status === 403) ? 'error' : 'offline'); });
+  }
+  function closeStream() { if (SY.es) { try { SY.es.close(); } catch (e) {} SY.es = null; } }
+  function openStream() {
+    closeStream();
+    if (!SY.cfg || !window.EventSource) return;
+    try {
+      var es = new EventSource(endpoint());
+      SY.es = es;
+      es.addEventListener('put', function (e) {
+        try {
+          var m = JSON.parse(e.data);
+          if (m && m.path === '/') { setStatus('ok'); handleRemote(m.data); } else pull();
+        } catch (x) {}
+      });
+      es.addEventListener('patch', function () { pull(); });
+      es.onerror = function () { if (SY.cfg) setStatus(es.readyState === 2 ? 'error' : 'offline'); };
+    } catch (e) {}
+  }
+  function syncStart() {
+    if (!SY.cfg) { setStatus('wait'); return; }
+    setStatus('wait');
+    openStream();
+    pull();
+  }
+  function syncResume() {
+    if (!SY.cfg) return;
+    if (!SY.es || SY.es.readyState === 2) openStream();
+    pull();
+  }
+  function copyText(txt, btn) {
+    var label = btn.textContent;
+    function done() { btn.textContent = 'Скопировано'; setTimeout(function () { btn.textContent = label; }, 1500); }
+    function fallback() {
+      var t = document.createElement('textarea');
+      t.value = txt; t.style.position = 'fixed'; t.style.opacity = '0';
+      document.body.appendChild(t); t.select();
+      try { document.execCommand('copy'); done(); } catch (e) {}
+      document.body.removeChild(t);
+    }
+    try { navigator.clipboard.writeText(txt).then(done, fallback); } catch (e) { fallback(); }
+  }
+  function renderSync() {
+    var el = $('syncBody');
+    if (!SY.cfg) {
+      el.innerHTML = '<p class="sync-p">Подключите бесплатную базу Firebase, и оба телефона будут видеть один и тот же день, режим и архив. Если в базе уже есть данные, данные этого телефона заменятся общими.</p>' +
+        '<label class="sl" for="syncInput">Адрес базы Firebase или код с другого телефона</label>' +
+        '<input class="txt" id="syncInput" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://…firebasedatabase.app">' +
+        '<div class="err" id="syncErr" role="alert"></div>' +
+        '<div class="set-btns"><button class="btn primary" data-act="sync-on">Подключить</button></div>';
+      return;
+    }
+    el.innerHTML = '<p class="sync-p">Подключено. Отправьте эту ссылку на второй телефон и откройте её там в Safari.</p>' +
+      '<input class="txt" id="syncLink" type="text" readonly value="' + shareLink().replace(/"/g, '&quot;') + '" aria-label="Ссылка для второго телефона">' +
+      '<div class="set-btns"><button class="btn primary" data-act="sync-copy">Скопировать ссылку</button>' +
+      '<button class="btn" data-act="sync-copy-code">Скопировать код</button></div>' +
+      '<p class="sync-p">Если второй телефон не подключился сам, откройте на нём вкладку «Режим» и вставьте код в поле подключения.</p>' +
+      '<div class="set-btns"><button class="btn" id="syncOff" data-act="sync-off">Отключить на этом телефоне</button></div>';
+  }
+  function syncOn() {
+    var inp = $('syncInput'), p = parseSync(inp.value);
+    if (!p) { $('syncErr').textContent = 'Это не похоже на адрес базы Firebase. Он заканчивается на firebasedatabase.app или firebaseio.com.'; return; }
+    SY.cfg = { url: p.url, code: p.code || randStr(24) };
+    SY.seeded = false; SY.lastRemoteRev = 0;
+    saveCfg();
+    renderSync();
+    syncStart();
+  }
+  var offArmed = false, offTimer = null;
+  function syncOff() {
+    var b = $('syncOff');
+    if (!offArmed) {
+      offArmed = true; b.textContent = 'Точно отключить? Нажмите ещё раз';
+      clearTimeout(offTimer);
+      offTimer = setTimeout(function () { offArmed = false; var bb = $('syncOff'); if (bb) bb.textContent = 'Отключить на этом телефоне'; }, 4000);
+      return;
+    }
+    clearTimeout(offTimer); offArmed = false;
+    closeStream();
+    SY.cfg = null; SY.dirty = false;
+    saveCfg();
+    setStatus('wait');
+    renderSync();
+  }
+
   /* ---------- glue ---------- */
   function renderToday() {
     $('notice').hidden = S.custom;
@@ -675,7 +874,7 @@ body { margin: 0; }
     $('tab-today').setAttribute('aria-selected', String(v === 'today'));
     $('tab-set').setAttribute('aria-selected', String(v === 'set'));
     $('tab-arc').setAttribute('aria-selected', String(v === 'arc'));
-    if (v === 'today') renderToday(); else if (v === 'set') renderSettings(); else renderArchive();
+    if (v === 'today') renderToday(); else if (v === 'set') { renderSettings(); renderSync(); } else renderArchive();
     window.scrollTo(0, 0);
   }
   function tick() {
@@ -693,6 +892,10 @@ body { margin: 0; }
       case 'undo': undo(); break;
       case 'nudge': nudge(+t.dataset.d); break;
       case 'nudge-reset': nudgeReset(); break;
+      case 'sync-on': syncOn(); break;
+      case 'sync-off': syncOff(); break;
+      case 'sync-copy': copyText(shareLink(), t); break;
+      case 'sync-copy-code': copyText(codeStr(), t); break;
       case 'reset': resetDay(); break;
       case 'edit':
         editing = +t.dataset.ev; renderEditor();
@@ -718,14 +921,25 @@ body { margin: 0; }
   document.addEventListener('change', function (e) {
     if (e.target.matches && e.target.matches('select[data-k]')) onSelect(e.target);
   });
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) { tick(); syncResume(); } });
+  window.addEventListener('online', function () { syncResume(); flush(); });
+  document.addEventListener('focusout', function () {
+    if (!pendingRender) return;
+    setTimeout(function () {
+      var a = document.activeElement;
+      if (!(a && (a.tagName === 'INPUT' || a.tagName === 'SELECT'))) rerender();
+    }, 50);
+  });
 
   load();
+  syncInit();
   var dl = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
   $('dateLine').textContent = dl.charAt(0).toUpperCase() + dl.slice(1);
   renderToday();
   renderSettings();
+  syncStart();
   setInterval(tick, 15000);
+  setInterval(function () { if (SY.cfg && !document.hidden) { flush(); syncResume(); } }, 20000);
 })();
 </script>
 </body>
