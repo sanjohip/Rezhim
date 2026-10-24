@@ -197,6 +197,10 @@ h1 { margin: 0; font-family: var(--f-num); font-weight: 600; font-size: 20px; le
 .syncchip.offline::before, .syncchip.error::before { background: var(--warn-day); }
 .txt { width: 100%; min-height: 44px; margin: 6px 0 0; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); font-size: 16px; }
 .sync-p { margin: 0; padding: 4px 0 8px; color: var(--muted); font-size: 14px; }
+.daytotal { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--track); }
+.dt-row { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; font-size: 14px; }
+.dt-row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.bar.thin { margin-top: 8px; height: 6px; }
 html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
 body { margin: 0; }
 </style>
@@ -234,7 +238,7 @@ body { margin: 0; }
   </main>
 
   <section id="setView" class="wrap" style="max-width:none" hidden>
-    <p class="set-note">Укажите, сколько малыш бодрствует перед каждым сном и сколько спит. После последнего бодрствования начинается ночной сон. Изменения сразу пересчитывают сегодняшний день.</p>
+    <p class="set-note">Укажите, сколько малыш бодрствует перед каждым сном и сколько спит. После последнего бодрствования начинается ночной сон. Изменения сразу пересчитывают сегодняшний день. Последнее бодрствование подгоняется так, чтобы за день набралась сумма бодрствования из режима.</p>
     <div class="card">
       <div id="setRows"></div>
       <div class="set-btns">
@@ -329,11 +333,13 @@ body { margin: 0; }
   function rowsFor(ev, cfg, over) {
     cfg = cfg || S; over = over || ST.over;
     var N = cfg.win.length, rows = [], cursor = ev[0];
+    var totalAwake = cfg.win.reduce(function (p, c) { return p + c; }, 0), awakeSoFar = 0;
     for (var s = 0; s < 2 * N; s++) {
       var night = s === 2 * N - 1;
       var type = night ? 'night' : (s % 2 === 0 ? 'awake' : 'nap');
       var idx = Math.floor(s / 2);
       var base = night ? 0 : (type === 'awake' ? cfg.win[idx] : cfg.nap[idx]);
+      if (type === 'awake' && idx === N - 1) base = Math.max(15, Math.round(totalAwake - awakeSoFar));
       var dur = night ? null : Math.max(5, base + (over[s] || 0));
       var startLogged = s < ev.length;
       var start = startLogged ? ev[s] : cursor;
@@ -342,6 +348,7 @@ body { margin: 0; }
         endLogged = s + 1 < ev.length;
         end = endLogged ? ev[s + 1] : start + dur * MIN;
       }
+      if (type === 'awake' && idx < N - 1) awakeSoFar += endLogged ? (end - start) / MIN : dur;
       rows.push({ s: s, type: type, idx: idx, base: base, dur: dur, start: start, end: end, startLogged: startLogged, endLogged: endLogged });
       cursor = end;
     }
@@ -356,6 +363,20 @@ body { margin: 0; }
 
   /* ---------- hero ---------- */
   function icon(id) { return '<svg aria-hidden="true"><use href="#' + id + '"/></svg>'; }
+
+  function dayTotalHTML(rows, now, asleep) {
+    var done = 0, target = S.win.reduce(function (p, c) { return p + c; }, 0);
+    rows.forEach(function (r) {
+      if (r.type === 'awake' && r.startLogged) {
+        var e = r.endLogged ? r.end : now;
+        if (e > r.start) done += (e - r.start) / MIN;
+      }
+    });
+    var pct = Math.max(0, Math.min(100, done / target * 100));
+    return '<div class="daytotal"><div class="dt-row"><span>Бодрствование за день</span>' +
+      '<b>' + fmtMin(done) + ' из ' + fmtMin(target) + '</b></div>' +
+      '<div class="bar thin"><i style="width:' + pct.toFixed(1) + '%"></i></div></div>';
+  }
 
   function renderHero() {
     var el = $('hero'), info = curInfo(), now = Date.now();
@@ -383,6 +404,10 @@ body { margin: 0; }
       target = (toNight ? 'Ночной сон в ' : 'Уложить в ') + hm(cur.end);
       meta = 'Проснулся в ' + hm(cur.start) + ' · бодрствует ' + fmtMs(now - cur.start);
       if (next && next.type === 'nap') hint = 'Дальше сон: ' + hm(next.start) + ' – ' + hm(next.end);
+      if (toNight) {
+        var lw = S.win[S.win.length - 1];
+        if (Math.abs(cur.base - lw) >= 1) hint = 'Последнее бодрствование ' + fmtMin(cur.base) + ' вместо ' + fmtMin(lw) + ': добираем норму за день';
+      }
     } else if (cur.type === 'nap') {
       var rem2 = cur.end - now;
       tag = 'Спит';
@@ -415,6 +440,7 @@ body { margin: 0; }
     }
     html += '<div class="meta">' + meta + '</div>';
     if (hint) html += '<div class="hint">' + hint + '</div>';
+    html += dayTotalHTML(rows, now, asleep);
     html += '</section>';
     el.innerHTML = html;
   }
@@ -466,7 +492,8 @@ body { margin: 0; }
           var actual = (r.end - r.start) / MIN, diff = Math.round(actual - r.dur);
           dur = fmtMin(actual) + (Math.abs(diff) >= 5 ? '<small>' + (diff > 0 ? '+' : '−') + fmtMin(Math.abs(diff)) + ' к плану</small>' : '');
         } else {
-          dur = fmtMin(r.dur) + (status === 'current' ? '<small>по плану</small>' : '');
+          var comp = r.type === 'awake' && r.idx === S.win.length - 1 && Math.abs(r.base - S.win[r.idx]) >= 1;
+          dur = fmtMin(r.dur) + (comp ? '<small>добор нормы</small>' : (status === 'current' ? '<small>по плану</small>' : ''));
         }
       }
       var pill = status === 'current' ? '<span class="pill' + (overdue ? ' warn' : '') + '">' + (overdue ? 'дольше плана' : 'сейчас') + '</span>' : '';
