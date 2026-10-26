@@ -201,6 +201,11 @@ h1 { margin: 0; font-family: var(--f-num); font-weight: 600; font-size: 20px; le
 .dt-row { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; font-size: 14px; }
 .dt-row b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .bar.thin { margin-top: 8px; height: 6px; }
+.linkrow { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 8px; }
+.when { display: flex; flex-direction: column; padding: 4px 0 2px; }
+.ol { margin: 0; padding: 0 0 8px 20px; color: var(--muted); font-size: 14px; }
+.ol li { padding: 2px 0; }
+.chk { width: 28px; height: 28px; accent-color: var(--ink); }
 html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
 body { margin: 0; }
 </style>
@@ -227,11 +232,18 @@ body { margin: 0; }
       <span>Сейчас стоят примерные значения. Задайте свой режим.</span>
       <button class="btn" data-act="tab" data-v="set">Задать режим</button>
     </div>
+    <div class="notice" id="flash" role="status" hidden></div>
     <div id="hero"></div>
     <div class="actions">
       <button class="act wake" id="act" data-act="press"></button>
+      <div class="when" id="when" hidden></div>
       <button class="link" id="undo" data-act="undo">Нажали по ошибке? Отменить последнее</button>
+      <div class="linkrow">
+        <button class="link" id="whenToggle" data-act="when-toggle">Отметить другое время</button>
+        <button class="link" id="missedToggle" data-act="missed-toggle" hidden>Пропустили сон?</button>
+      </div>
     </div>
+    <div class="editor" id="missed" hidden></div>
     <div class="editor" id="editor" hidden></div>
     <section class="card" id="timeline" aria-label="День"></section>
     <div class="foot"><button class="link" id="reset" data-act="reset">Сбросить день</button></div>
@@ -251,6 +263,10 @@ body { margin: 0; }
       <div class="card-h"><h2>Общий день на двоих</h2></div>
       <div id="syncBody" style="padding-bottom:10px"></div>
     </section>
+    <section class="card" id="remCard" aria-label="Напоминание «скоро спать»">
+      <div class="card-h"><h2>Напоминание «скоро спать»</h2></div>
+      <div id="remBody" style="padding-bottom:10px"></div>
+    </section>
   </section>
   <section id="arcView" class="wrap" style="max-width:none" hidden>
     <p class="set-note">Дни за последние две недели. День попадает сюда, когда утром вы нажимаете «Проснулся — новый день». Нажмите на день, чтобы увидеть подробности.</p>
@@ -265,12 +281,14 @@ body { margin: 0; }
   'use strict';
   var KEY = 'rezhim-malysha-v1';
   var MIN = 60000;
-  var S = { win: [150, 180, 210], nap: [90, 90], custom: false };
+  var S = { win: [150, 180, 210], nap: [90, 90], custom: false, remind: { on: false, lead: 15, name: '' } };
   var ST = { events: [], over: {} };
   var AR = [];
   var SY = { cfg: null, dev: null, status: 'wait', dirty: false, inflight: false, es: null, lastRemoteRev: 0, seeded: false, offTimer: null, rev: 0 };
   var SYNC_KEY = 'rezhim-malysha-sync-v1';
   var pendingRender = false;
+  var whenOpen = false, actHM = null, missedOpen = false, flashTimer = null, remTimer = null;
+  var NTFY = 'https://ntfy.sh';
   var DAY = 86400000, AX0 = 5, AX1 = 23;
   var view = 'today', editing = null, startHM = null, resetArmed = false, resetTimer = null;
 
@@ -307,6 +325,10 @@ body { margin: 0; }
         S.custom = !!o.S.custom;
       }
     }
+    if (o.S && o.S.remind && typeof o.S.remind === 'object') {
+      var rr = o.S.remind;
+      S.remind = { on: !!rr.on, lead: Math.min(60, Math.max(5, Math.round(+rr.lead || 15))), name: String(rr.name || '').slice(0, 20) };
+    }
     if (o.ST && Array.isArray(o.ST.events)) {
       ST = { events: o.ST.events.map(Number).filter(Number.isFinite), over: (o.ST.over && typeof o.ST.over === 'object') ? o.ST.over : {} };
     }
@@ -324,6 +346,7 @@ body { margin: 0; }
   function save() {
     persistLocal();
     if (SY.cfg) { SY.dirty = true; flush(); }
+    scheduleReminder();
   }
 
   /* ---------- the schedule ----------
@@ -408,6 +431,7 @@ body { margin: 0; }
         var lw = S.win[S.win.length - 1];
         if (Math.abs(cur.base - lw) >= 1) hint = 'Последнее бодрствование ' + fmtMin(cur.base) + ' вместо ' + fmtMin(lw) + ': добираем норму за день';
       }
+      if (rem < -20 * MIN && !toNight) hint = 'Если сон был, но вы его не отметили, нажмите «Пропустили сон?» под кнопкой.';
     } else if (cur.type === 'nap') {
       var rem2 = cur.end - now;
       tag = 'Спит';
@@ -453,8 +477,57 @@ body { margin: 0; }
     else { cls = 'wake'; txt = 'Проснулся — новый день'; }
     b.className = 'act ' + cls;
     b.textContent = txt;
+    b.dataset.len = String(ST.events.length);
     $('undo').hidden = !info;
     $('reset').hidden = !info;
+    var nightNow = !!info && info.cur.type === 'night';
+    $('whenToggle').hidden = !info || nightNow;
+    var open = !!info && (whenOpen || nightNow);
+    var w = $('when');
+    w.hidden = !open;
+    if (open) {
+      if (actHM == null) actHM = hm(Date.now());
+      w.innerHTML = '<label class="sl" for="actTime">' + (nightNow ? 'Во сколько проснулся?' : 'Во сколько это было?') + '</label>' +
+        '<input class="txt" type="time" id="actTime" value="' + actHM + '"><div class="err" id="actErr" role="alert"></div>';
+    } else w.innerHTML = '';
+  }
+
+  function flash(msg) {
+    var f = $('flash');
+    f.textContent = msg; f.hidden = false;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(function () { f.hidden = true; }, 8000);
+  }
+
+  function renderMissed() {
+    var el = $('missed'), info = curInfo(), N = S.win.length;
+    var can = !!info && info.cur.type === 'awake' && info.cur.idx < N - 1;
+    $('missedToggle').hidden = !can;
+    if (!can || !missedOpen) { el.hidden = true; el.innerHTML = ''; if (!can) missedOpen = false; return; }
+    var now = Date.now(), r = info.cur, nap = info.rows[info.cs + 1];
+    var sl = Math.max(r.start + 5 * MIN, Math.min(r.end, now - 20 * MIN));
+    var wk = Math.min(sl + nap.dur * MIN, now);
+    if (wk <= sl) wk = now;
+    el.hidden = false;
+    el.innerHTML = '<div class="ed-t">Добавить сон, который не отметили</div>' +
+      '<label class="sl" for="missSleep">Уснул в</label><input class="txt" type="time" id="missSleep" value="' + hm(sl) + '">' +
+      '<label class="sl" for="missWake">Проснулся в</label><input class="txt" type="time" id="missWake" value="' + hm(wk) + '">' +
+      '<div class="err" id="missErr" role="alert"></div>' +
+      '<div class="ed-row"><button class="btn primary" data-act="missed-add">Добавить сон</button><button class="btn" data-act="missed-cancel">Отмена</button></div>';
+  }
+  function missedAdd() {
+    var info = curInfo(), now = Date.now();
+    if (!info || info.cur.type !== 'awake') return;
+    var s1 = tsFromHM($('missSleep').value, now), w1 = tsFromHM($('missWake').value, now), last = ST.events[ST.events.length - 1];
+    if (s1 == null || w1 == null || s1 <= last || w1 <= s1 || w1 > now + MIN) {
+      $('missErr').textContent = 'Уснул должно быть позже ' + hm(last) + ', проснулся позже, чем уснул, и не позже текущего времени.';
+      return;
+    }
+    ST.events.push(s1, w1);
+    Object.keys(ST.over).forEach(function (k) { if (+k > info.cs) delete ST.over[k]; });
+    missedOpen = false;
+    save();
+    renderToday();
   }
 
   /* ---------- timeline ---------- */
@@ -543,21 +616,53 @@ body { margin: 0; }
 
   /* ---------- actions ---------- */
   function press() {
-    var now = Date.now(), N = S.win.length, ev = ST.events;
+    var want = +$('act').dataset.len;
+    if (!SY.cfg) { doPress(); return; }
+    var finished = false, timer = setTimeout(go, 2000);
+    function go() {
+      if (finished) return;
+      finished = true; clearTimeout(timer);
+      if (ST.events.length !== want) {
+        renderToday();
+        flash('Другой телефон уже сделал отметку, данные обновлены. Проверьте экран и нажмите ещё раз, если нужно.');
+        return;
+      }
+      doPress();
+    }
+    fetch(endpoint(), { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d) handleRemote(d); })
+      .catch(function () {})
+      .then(go);
+  }
+  function doPress() {
+    var now = Date.now(), N = S.win.length, ev = ST.events, at = now;
     if (!ev.length) {
       var inp = $('startTime');
       var ts = inp ? tsFromHM(inp.value, now) : null;
       if (ts == null || ts > now + MIN) { $('startErr').textContent = 'Укажите время подъёма, не позже текущего.'; return; }
       ST = { events: [ts], over: {} };
       startHM = null;
-    } else if (ev.length >= 2 * N) {
-      AR.unshift({ ev: ev.slice(0, 2 * N), over: ST.over, nightEnd: now, win: S.win.slice(), nap: S.nap.slice() });
-      pruneAR();
-      ST = { events: [now], over: {} };
     } else {
-      ev.push(Math.max(now, ev[ev.length - 1]));
+      var nightNow = ev.length >= 2 * N, box = $('actTime');
+      if (box && (whenOpen || nightNow) && box.value) {
+        at = tsFromHM(box.value, now);
+        var last = ev[ev.length - 1];
+        if (at == null || at > now + MIN || at <= last) {
+          var er = $('actErr');
+          if (er) er.textContent = 'Время должно быть после ' + hm(last) + ' и не позже текущего.';
+          return;
+        }
+      }
+      if (nightNow) {
+        AR.unshift({ ev: ev.slice(0, 2 * N), over: ST.over, nightEnd: at, win: S.win.slice(), nap: S.nap.slice() });
+        pruneAR();
+        ST = { events: [at], over: {} };
+      } else {
+        ev.push(at);
+      }
     }
-    editing = null;
+    whenOpen = false; actHM = null; missedOpen = false; editing = null;
     save();
     renderToday();
   }
@@ -888,10 +993,85 @@ body { margin: 0; }
     renderSync();
   }
 
+  /* ---------- reminders through ntfy.sh ---------- */
+  function topic() {
+    if (SY.cfg) return 'rezhim-' + SY.cfg.code;
+    var t = null;
+    try { t = localStorage.getItem('rezhim-malysha-topic'); } catch (e) {}
+    if (!t) { t = 'rezhim-' + randStr(24); try { localStorage.setItem('rezhim-malysha-topic', t); } catch (e) {} }
+    return t;
+  }
+  function remStatus(txt) { var el = $('remStatus'); if (el) el.textContent = txt; }
+  function ntfyPost(payload, seq) {
+    return fetch(NTFY, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Sequence-ID': seq }, body: JSON.stringify(payload) });
+  }
+  function scheduleReminder() {
+    clearTimeout(remTimer);
+    if (!S.remind || !S.remind.on) return;
+    remTimer = setTimeout(doSchedule, 1500);
+  }
+  function cancelReminder() {
+    try { fetch(NTFY + '/' + topic() + '/sleep', { method: 'DELETE' }).catch(function () {}); } catch (e) {}
+  }
+  function doSchedule() {
+    var R = S.remind;
+    if (!R || !R.on) return;
+    var info = curInfo(), now = Date.now();
+    if (!info || info.cur.type === 'night') { cancelReminder(); return; }
+    var target = null;
+    for (var i = info.cs + 1; i < info.rows.length; i++) {
+      if (info.rows[i].type === 'nap' || info.rows[i].type === 'night') { target = info.rows[i]; break; }
+    }
+    if (!target) return;
+    var at = target.start - R.lead * MIN, secs = Math.round((at - now) / 1000);
+    if (secs < 15) { cancelReminder(); remStatus('Напоминание не запланировано: до сна меньше ' + R.lead + ' мин.'); return; }
+    if (secs > 3 * 24 * 3600) return;
+    var night = target.type === 'night';
+    var msg = (R.name ? R.name + ': ' : '') + (night ? 'ночной сон' : 'дневной сон') + ' в ' + hm(target.start) + ', через ' + R.lead + ' мин';
+    ntfyPost({ topic: topic(), title: night ? 'Скоро ночной сон' : 'Скоро спать', message: msg, priority: 4, tags: ['zzz'], delay: secs + 's', sequence_id: 'sleep' }, 'sleep')
+      .then(function (r) { remStatus(r.ok ? 'Напоминание запланировано на ' + hm(at) : 'Не удалось запланировать напоминание (код ' + r.status + ').'); })
+      .catch(function () { remStatus('Нет связи с ntfy.sh, напоминание не запланировано.'); });
+  }
+  function remTest() {
+    remStatus('Отправляем проверку…');
+    ntfyPost({ topic: topic(), title: 'Проверка', message: 'Напоминания работают', priority: 3, tags: ['white_check_mark'] }, 'test')
+      .then(function (r) { remStatus(r.ok ? 'Отправлено. Уведомление должно прийти за несколько секунд.' : 'Не получилось отправить (код ' + r.status + ').'); })
+      .catch(function () { remStatus('Нет связи с ntfy.sh.'); });
+  }
+  function remTest2() {
+    remStatus('Планируем два сообщения…');
+    ntfyPost({ topic: topic(), title: 'Проверка замены', message: 'Это сообщение должно быть заменено и не прийти', priority: 3, delay: '25s', sequence_id: 'swap' }, 'swap')
+      .then(function () {
+        return ntfyPost({ topic: topic(), title: 'Проверка замены', message: 'Замена работает: пришло только это сообщение', priority: 3, delay: '25s', sequence_id: 'swap' }, 'swap');
+      })
+      .then(function (r) { remStatus(r.ok ? 'Через 25 секунд должно прийти одно сообщение «Замена работает». Если придут два, напишите мне.' : 'Не получилось (код ' + r.status + ').'); })
+      .catch(function () { remStatus('Нет связи с ntfy.sh.'); });
+  }
+  function renderRem() {
+    var R = S.remind, el = $('remBody'), opts = '';
+    [5, 10, 15, 20, 30, 45, 60].forEach(function (m) { opts += '<option value="' + m + '"' + (m === R.lead ? ' selected' : '') + '>' + m + ' мин</option>'; });
+    el.innerHTML =
+      '<p class="sync-p">Напоминание придёт на оба телефона за несколько минут до времени уложить. Для этого нужно бесплатное приложение ntfy.</p>' +
+      '<div class="set-row"><label class="sl" for="remOn">Напоминать, что скоро спать</label><input class="chk" type="checkbox" id="remOn"' + (R.on ? ' checked' : '') + '></div>' +
+      '<div class="set-row"><label class="sl" for="remLead">За сколько минут</label><div class="pair"><select id="remLead">' + opts + '</select></div></div>' +
+      '<label class="sl" for="remName" style="display:block;padding-top:10px">Имя в напоминании (можно оставить пустым)</label>' +
+      '<input class="txt" id="remName" type="text" maxlength="20" value="' + String(R.name).replace(/"/g, '&quot;') + '">' +
+      '<label class="sl" for="remTopic" style="display:block;padding-top:12px">Тема для приложения ntfy</label>' +
+      '<input class="txt" id="remTopic" type="text" readonly value="' + topic() + '">' +
+      '<div class="set-btns"><button class="btn" data-act="rem-copy">Скопировать тему</button>' +
+      '<button class="btn" data-act="rem-test">Отправить проверку</button>' +
+      '<button class="btn" data-act="rem-test2">Проверить замену</button></div>' +
+      '<div class="sync-p" id="remStatus" role="status"></div>' +
+      '<ol class="ol"><li>Установите на телефон приложение ntfy из App Store (бесплатное).</li>' +
+      '<li>Откройте его, нажмите «+», вставьте тему из поля выше, сервер оставьте ntfy.sh и нажмите «Подписаться».</li>' +
+      '<li>Разрешите уведомления.</li><li>Нажмите «Отправить проверку».</li></ol>' +
+      '<p class="sync-p">Через ntfy.sh проходит только текст напоминания и время. Режим и данные дня остаются в вашей базе.</p>';
+  }
+
   /* ---------- glue ---------- */
   function renderToday() {
     $('notice').hidden = S.custom;
-    renderHero(); renderAct(); renderTimeline(); renderEditor();
+    renderHero(); renderAct(); renderMissed(); renderTimeline(); renderEditor();
   }
   function setView(v) {
     view = v;
@@ -901,7 +1081,7 @@ body { margin: 0; }
     $('tab-today').setAttribute('aria-selected', String(v === 'today'));
     $('tab-set').setAttribute('aria-selected', String(v === 'set'));
     $('tab-arc').setAttribute('aria-selected', String(v === 'arc'));
-    if (v === 'today') renderToday(); else if (v === 'set') { renderSettings(); renderSync(); } else renderArchive();
+    if (v === 'today') renderToday(); else if (v === 'set') { renderSettings(); renderSync(); renderRem(); } else renderArchive();
     window.scrollTo(0, 0);
   }
   function tick() {
@@ -923,6 +1103,13 @@ body { margin: 0; }
       case 'sync-off': syncOff(); break;
       case 'sync-copy': copyText(shareLink(), t); break;
       case 'sync-copy-code': copyText(codeStr(), t); break;
+      case 'when-toggle': whenOpen = !whenOpen; actHM = null; renderAct(); break;
+      case 'missed-toggle': missedOpen = !missedOpen; renderMissed(); break;
+      case 'missed-add': missedAdd(); break;
+      case 'missed-cancel': missedOpen = false; renderMissed(); break;
+      case 'rem-copy': copyText(topic(), t); break;
+      case 'rem-test': remTest(); break;
+      case 'rem-test2': remTest2(); break;
       case 'reset': resetDay(); break;
       case 'edit':
         editing = +t.dataset.ev; renderEditor();
@@ -946,10 +1133,17 @@ body { margin: 0; }
     }
   });
   document.addEventListener('change', function (e) {
-    if (e.target.matches && e.target.matches('select[data-k]')) onSelect(e.target);
+    var t = e.target;
+    if (t.matches && t.matches('select[data-k]')) onSelect(t);
+    else if (t.id === 'remOn') { S.remind.on = t.checked; save(); if (t.checked) scheduleReminder(); else cancelReminder(); }
+    else if (t.id === 'remLead') { S.remind.lead = +t.value; save(); }
+    else if (t.id === 'remName') { S.remind.name = t.value.trim().slice(0, 20); save(); }
   });
+  document.addEventListener('input', function (e) { if (e.target.id === 'actTime') actHM = e.target.value; });
+  window.addEventListener('pageshow', function () { tick(); syncResume(); });
+  window.addEventListener('focus', function () { tick(); syncResume(); });
   document.addEventListener('visibilitychange', function () { if (!document.hidden) { tick(); syncResume(); } });
-  window.addEventListener('online', function () { syncResume(); flush(); });
+  window.addEventListener('online', function () { syncResume(); flush(); scheduleReminder(); });
   document.addEventListener('focusout', function () {
     if (!pendingRender) return;
     setTimeout(function () {
@@ -959,6 +1153,7 @@ body { margin: 0; }
   });
 
   load();
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
   syncInit();
   var dl = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
   $('dateLine').textContent = dl.charAt(0).toUpperCase() + dl.slice(1);
