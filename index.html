@@ -206,6 +206,9 @@ h1 { margin: 0; font-family: var(--f-num); font-weight: 600; font-size: 20px; le
 .ol { margin: 0; padding: 0 0 8px 20px; color: var(--muted); font-size: 14px; }
 .ol li { padding: 2px 0; }
 .chk { width: 28px; height: 28px; accent-color: var(--ink); }
+.act.alt { background: var(--surface); color: var(--ink); border: 2px solid var(--ink); font-size: 20px; min-height: 60px; }
+.nwl { margin-top: 3px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.when .hint2 { color: var(--muted); font-size: 13px; padding-top: 4px; }
 html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
 body { margin: 0; }
 </style>
@@ -235,12 +238,15 @@ body { margin: 0; }
     <div class="notice" id="flash" role="status" hidden></div>
     <div id="hero"></div>
     <div class="actions">
+      <button class="act alt" id="act3" data-act="night-quick" hidden>Проснулся и сразу уснул</button>
+      <button class="act alt" id="act2" data-act="night-wake" hidden>Проснулся, не уснул</button>
       <button class="act wake" id="act" data-act="press"></button>
       <div class="when" id="when" hidden></div>
       <button class="link" id="undo" data-act="undo">Нажали по ошибке? Отменить последнее</button>
       <div class="linkrow">
         <button class="link" id="whenToggle" data-act="when-toggle">Отметить другое время</button>
         <button class="link" id="missedToggle" data-act="missed-toggle" hidden>Пропустили сон?</button>
+        <button class="link" id="nightMorning" data-act="night-morning" hidden>Это уже утро, он не засыпал</button>
       </div>
     </div>
     <div class="editor" id="missed" hidden></div>
@@ -282,7 +288,40 @@ body { margin: 0; }
   var KEY = 'rezhim-malysha-v1';
   var MIN = 60000;
   var S = { win: [150, 180, 210], nap: [90, 90], custom: false, remind: { on: false, lead: 15, name: '' } };
-  var ST = { events: [], over: {} };
+  var ST = { events: [], over: {}, nw: [], qw: [], nl: [] };
+  function newST(ev) { return { events: ev, over: {}, nw: [], qw: [], nl: [] }; }
+  function cleanNl(a) { return Array.isArray(a) ? a.filter(function (k) { return k === 'q' || k === 'w'; }) : []; }
+  function nightKey() { return ST.events.length + ':' + ST.nw.length + ':' + ST.qw.length; }
+  function quickLine(qw) {
+    if (!qw.length) return '';
+    return '<div class="nwl">Проснулся и сразу уснул: ' + qw.length + ' ' + ruTimes(qw.length) + ' (' + qw.map(hm).join(', ') + ')</div>';
+  }
+  function nightText(qw, nw, endTs) {
+    var parts = [], st = nwStats(nw, endTs);
+    if (qw.length) parts.push('сразу засыпал ' + qw.length + ' ' + ruTimes(qw.length));
+    if (st.cnt) parts.push('не засыпал ' + st.cnt + ' ' + ruTimes(st.cnt) + ', ' + fmtMs(st.tot));
+    return parts.join(', ');
+  }
+  function nwOpen() { return ST.nw.length % 2 === 1; }
+  function cleanNw(a) { return Array.isArray(a) ? a.map(Number).filter(Number.isFinite) : []; }
+  function ruTimes(n) { var a = n % 10, b = n % 100; return (a >= 2 && a <= 4 && (b < 12 || b > 14)) ? 'раза' : 'раз'; }
+  function nwStats(nw, endTs) {
+    var tot = 0, i;
+    for (i = 0; i < nw.length; i += 2) {
+      var e = i + 1 < nw.length ? nw[i + 1] : endTs;
+      if (e > nw[i]) tot += e - nw[i];
+    }
+    return { cnt: Math.ceil(nw.length / 2), tot: tot };
+  }
+  function nwLines(nw, endTs, openLabel) {
+    var out = '', i;
+    for (i = 0; i < nw.length; i += 2) {
+      var closed = i + 1 < nw.length, e = closed ? nw[i + 1] : endTs;
+      out += '<div class="nwl">Пробуждение ' + hm(nw[i]) + ' – ' + (closed ? hm(e) : openLabel) + ' · ' + fmtMs(Math.max(0, e - nw[i])) + '</div>';
+    }
+    return out;
+  }
+  var actTouched = false, DAYMS = 86400000;
   var AR = [];
   var SY = { cfg: null, dev: null, status: 'wait', dirty: false, inflight: false, es: null, lastRemoteRev: 0, seeded: false, offTimer: null, rev: 0 };
   var SYNC_KEY = 'rezhim-malysha-sync-v1';
@@ -330,10 +369,10 @@ body { margin: 0; }
       S.remind = { on: !!rr.on, lead: Math.min(60, Math.max(5, Math.round(+rr.lead || 15))), name: String(rr.name || '').slice(0, 20) };
     }
     if (o.ST && Array.isArray(o.ST.events)) {
-      ST = { events: o.ST.events.map(Number).filter(Number.isFinite), over: (o.ST.over && typeof o.ST.over === 'object') ? o.ST.over : {} };
+      ST = { events: o.ST.events.map(Number).filter(Number.isFinite), over: (o.ST.over && typeof o.ST.over === 'object') ? o.ST.over : {}, nw: cleanNw(o.ST.nw), qw: cleanNw(o.ST.qw), nl: cleanNl(o.ST.nl) };
     }
     if (Array.isArray(o.AR)) {
-      AR = o.AR.filter(function (e) { return e && Array.isArray(e.ev) && e.ev.length >= 2 && Array.isArray(e.win) && Array.isArray(e.nap); });
+      AR = o.AR.filter(function (e) { return e && Array.isArray(e.ev) && e.ev.length >= 2 && Array.isArray(e.win) && Array.isArray(e.nap); }).map(function (e) { e.nw = cleanNw(e.nw); e.qw = cleanNw(e.qw); return e; });
       pruneAR();
     }
   }
@@ -441,11 +480,20 @@ body { margin: 0; }
       meta = 'Уснул в ' + hm(cur.start) + ' · спит ' + fmtMs(now - cur.start);
       if (next && next.end) hint = (after && after.type === 'night' ? 'Ночной сон ≈ ' : 'Следующий сон ≈ ') + hm(next.end);
     } else {
-      tag = 'Ночной сон';
-      label = 'Уснул в';
-      big = hm(cur.start);
-      meta = 'Спит ' + fmtMs(now - cur.start);
+      var nws = nwStats(ST.nw, now), lastW = ST.nw[ST.nw.length - 1];
       showBar = false;
+      if (nwOpen()) {
+        tag = 'Не спит ночью'; label = 'Проснулся в'; big = hm(lastW);
+        meta = 'Не спит ' + fmtMs(now - lastW) + ' · ночной сон с ' + hm(cur.start);
+      } else if (ST.nw.length) {
+        tag = 'Ночной сон'; label = 'Снова уснул в'; big = hm(lastW);
+        meta = 'Ночной сон с ' + hm(cur.start) + ' · прошло ' + fmtMs(now - cur.start);
+      } else {
+        tag = 'Ночной сон'; label = 'Уснул в'; big = hm(cur.start);
+        meta = 'Спит ' + fmtMs(now - cur.start);
+      }
+      var ntx = nightText(ST.qw, ST.nw, now);
+      if (ntx) hint = 'Ночью: ' + ntx;
     }
 
     var html = '<section class="hero ' + (asleep ? 'night' : 'day') + '">' +
@@ -471,24 +519,31 @@ body { margin: 0; }
 
   function renderAct() {
     var info = curInfo(), b = $('act'), cls, txt;
+    var nightNow = !!info && info.cur.type === 'night', open2 = nightNow && nwOpen();
     if (!info) { cls = 'wake'; txt = 'Проснулся — начать день'; }
     else if (info.cur.type === 'awake') { cls = 'sleep'; txt = 'Уснул'; }
     else if (info.cur.type === 'nap') { cls = 'wake'; txt = 'Проснулся'; }
+    else if (open2) { cls = 'sleep'; txt = 'Снова уснул'; }
     else { cls = 'wake'; txt = 'Проснулся — новый день'; }
     b.className = 'act ' + cls;
     b.textContent = txt;
-    b.dataset.len = String(ST.events.length);
+    b.dataset.len = nightKey();
+    $('act2').hidden = !(nightNow && !open2);
+    var q3 = $('act3');
+    q3.hidden = !(nightNow && !open2);
+    q3.textContent = 'Проснулся и сразу уснул' + (ST.qw.length ? ' · ' + ST.qw.length : '');
+    $('nightMorning').hidden = !open2;
     $('undo').hidden = !info;
     $('reset').hidden = !info;
-    var nightNow = !!info && info.cur.type === 'night';
     $('whenToggle').hidden = !info || nightNow;
     var open = !!info && (whenOpen || nightNow);
     var w = $('when');
     w.hidden = !open;
     if (open) {
-      if (actHM == null) actHM = hm(Date.now());
-      w.innerHTML = '<label class="sl" for="actTime">' + (nightNow ? 'Во сколько проснулся?' : 'Во сколько это было?') + '</label>' +
-        '<input class="txt" type="time" id="actTime" value="' + actHM + '"><div class="err" id="actErr" role="alert"></div>';
+      if (actHM == null || !actTouched) actHM = hm(Date.now());
+      w.innerHTML = '<label class="sl" for="actTime">Во сколько это было?</label>' +
+        '<input class="txt" type="time" id="actTime" value="' + actHM + '">' +
+        '<div class="hint2">Если не менять, запишется текущее время.</div><div class="err" id="actErr" role="alert"></div>';
     } else w.innerHTML = '';
   }
 
@@ -560,6 +615,13 @@ body { margin: 0; }
       if (r.type === 'night') times = (r.startLogged ? 'с ' : 'с ≈') + (r.startLogged ? t(r.start, true, r.s) : hm(r.start));
       else times = t(r.start, r.startLogged, r.s) + ' – ' + t(r.end, r.endLogged, r.s + 1);
       var dur = '';
+      var extra = '';
+      if (r.type === 'night' && r.startLogged && (ST.nw.length || ST.qw.length)) {
+        var nst = nwStats(ST.nw, now);
+        extra = quickLine(ST.qw) + nwLines(ST.nw, now, 'сейчас');
+        dur = (ST.nw.length ? 'не спал ' + fmtMs(nst.tot) + '<small>' + nst.cnt + ' ' + ruTimes(nst.cnt) + '</small>' : '') +
+          (ST.qw.length ? '<small>сразу засыпал: ' + ST.qw.length + '</small>' : '');
+      }
       if (r.type !== 'night') {
         if (status === 'done') {
           var actual = (r.end - r.start) / MIN, diff = Math.round(actual - r.dur);
@@ -572,7 +634,7 @@ body { margin: 0; }
       var pill = status === 'current' ? '<span class="pill' + (overdue ? ' warn' : '') + '">' + (overdue ? 'дольше плана' : 'сейчас') + '</span>' : '';
       html += '<li class="row ' + status + '">' +
         '<span class="mark ' + (r.type === 'awake' ? 'awake' : 'sleep') + '">' + icon(r.type === 'awake' ? 'i-sun' : 'i-moon') + '</span>' +
-        '<div><div class="rtitle">' + title + pill + '</div><div class="rtime">' + times + '</div></div>' +
+        '<div><div class="rtitle">' + title + pill + '</div><div class="rtime">' + times + '</div>' + extra + '</div>' +
         '<div class="rdur">' + dur + '</div></li>';
     });
     html += '</ul>';
@@ -594,7 +656,7 @@ body { margin: 0; }
   function saveEdit() {
     var i = editing, ev = ST.events, v = $('editTime').value, day = 86400000, now = Date.now();
     var prev = i > 0 ? ev[i - 1] : -Infinity;
-    var next = i < ev.length - 1 ? ev[i + 1] : now + MIN;
+    var next = i < ev.length - 1 ? ev[i + 1] : (ST.nw.length || ST.qw.length ? Math.min(ST.nw.length ? ST.nw[0] : Infinity, ST.qw.length ? ST.qw[0] : Infinity) : now + MIN);
     var offs = i > 0 ? [0, -day, day] : [0], found = null;
     for (var k = 0; k < offs.length; k++) {
       var c = tsFromHM(v, ev[i] + offs[k]);
@@ -615,19 +677,19 @@ body { margin: 0; }
   }
 
   /* ---------- actions ---------- */
-  function press() {
-    var want = +$('act').dataset.len;
-    if (!SY.cfg) { doPress(); return; }
+  function guarded(fn) {
+    var want = $('act').dataset.len;
+    if (!SY.cfg) { fn(); return; }
     var finished = false, timer = setTimeout(go, 2000);
     function go() {
       if (finished) return;
       finished = true; clearTimeout(timer);
-      if (ST.events.length !== want) {
+      if (nightKey() !== want) {
         renderToday();
         flash('Другой телефон уже сделал отметку, данные обновлены. Проверьте экран и нажмите ещё раз, если нужно.');
         return;
       }
-      doPress();
+      fn();
     }
     fetch(endpoint(), { cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -635,42 +697,99 @@ body { margin: 0; }
       .catch(function () {})
       .then(go);
   }
+  function press() { guarded(doPress); }
+  function nightWake() { guarded(doNightWake); }
+  function nightMorning() { guarded(doNightMorning); }
+  function nightQuick() { guarded(doNightQuick); }
+
+  function pickAt(last) {
+    var now = Date.now(), box = $('actTime');
+    if (box && actTouched && box.value) {
+      var at = tsFromHM(box.value, now);
+      if (at != null && at > now + MIN) at -= DAYMS;
+      if (at != null && at <= last && last - at < MIN) at = last;
+      if (at == null || at > now + MIN || at < last) {
+        var er = $('actErr');
+        if (er) er.textContent = 'Время должно быть после ' + hm(last) + ' и не позже текущего.';
+        return null;
+      }
+      return at;
+    }
+    return Math.max(now, last);
+  }
+  function lastMark() {
+    var ev = ST.events, last = ev[ev.length - 1];
+    if (ST.nw.length) last = Math.max(last, ST.nw[ST.nw.length - 1]);
+    return last;
+  }
+  function rollover(at) {
+    var N = S.win.length;
+    AR.unshift({ ev: ST.events.slice(0, 2 * N), over: ST.over, nightEnd: at, win: S.win.slice(), nap: S.nap.slice(), nw: ST.nw.slice(), qw: ST.qw.slice(), nl: ST.nl.slice() });
+    pruneAR();
+    ST = newST([at]);
+  }
+  function afterMark() {
+    whenOpen = false; actHM = null; actTouched = false; missedOpen = false; editing = null;
+    save();
+    renderToday();
+  }
   function doPress() {
-    var now = Date.now(), N = S.win.length, ev = ST.events, at = now;
+    var now = Date.now(), N = S.win.length, ev = ST.events;
     if (!ev.length) {
       var inp = $('startTime');
       var ts = inp ? tsFromHM(inp.value, now) : null;
       if (ts == null || ts > now + MIN) { $('startErr').textContent = 'Укажите время подъёма, не позже текущего.'; return; }
-      ST = { events: [ts], over: {} };
+      ST = newST([ts]);
       startHM = null;
     } else {
-      var nightNow = ev.length >= 2 * N, box = $('actTime');
-      if (box && (whenOpen || nightNow) && box.value) {
-        at = tsFromHM(box.value, now);
-        var last = ev[ev.length - 1];
-        if (at == null || at > now + MIN || at <= last) {
-          var er = $('actErr');
-          if (er) er.textContent = 'Время должно быть после ' + hm(last) + ' и не позже текущего.';
-          return;
-        }
-      }
+      var nightNow = ev.length >= 2 * N;
+      var at = pickAt(lastMark());
+      if (at == null) return;
       if (nightNow) {
-        AR.unshift({ ev: ev.slice(0, 2 * N), over: ST.over, nightEnd: at, win: S.win.slice(), nap: S.nap.slice() });
-        pruneAR();
-        ST = { events: [at], over: {} };
+        if (nwOpen()) { ST.nw.push(at); ST.nl.push('w'); } else rollover(at);
       } else {
         ev.push(at);
       }
     }
-    whenOpen = false; actHM = null; missedOpen = false; editing = null;
-    save();
-    renderToday();
+    afterMark();
+  }
+  function doNightWake() {
+    if (ST.events.length < 2 * S.win.length || nwOpen()) return;
+    var at = pickAt(lastMark());
+    if (at == null) return;
+    ST.nw.push(at); ST.nl.push('w');
+    afterMark();
+  }
+  function doNightQuick() {
+    if (ST.events.length < 2 * S.win.length || nwOpen()) return;
+    var at = pickAt(ST.events[ST.events.length - 1]);
+    if (at == null) return;
+    ST.qw.push(at); ST.nl.push('q');
+    afterMark();
+  }
+  function doNightMorning() {
+    if (ST.events.length < 2 * S.win.length || !nwOpen()) return;
+    var at = ST.nw.pop();
+    if (ST.nl.length && ST.nl[ST.nl.length - 1] === 'w') ST.nl.pop();
+    rollover(at);
+    afterMark();
   }
   function undo() {
     if (!ST.events.length) return;
+    if (ST.nw.length || ST.qw.length) {
+      var kind;
+      if (ST.nl.length === ST.nw.length + ST.qw.length) kind = ST.nl.pop();
+      else {
+        var lq = ST.qw[ST.qw.length - 1], lw = ST.nw[ST.nw.length - 1];
+        kind = (lw == null || (lq != null && lq >= lw)) ? 'q' : 'w';
+        ST.nl = [];
+      }
+      if (kind === 'q') ST.qw.pop(); else ST.nw.pop();
+      editing = null; save(); renderToday(); return;
+    }
     if (ST.events.length === 1 && AR.length && AR[0].nightEnd === ST.events[0]) {
       var back = AR.shift();
-      ST = { events: back.ev.slice(), over: back.over || {} };
+      ST = { events: back.ev.slice(), over: back.over || {}, nw: cleanNw(back.nw), qw: cleanNw(back.qw), nl: cleanNl(back.nl) };
       editing = null; save(); renderToday();
       return;
     }
@@ -709,7 +828,7 @@ body { margin: 0; }
     clearTimeout(resetTimer);
     resetArmed = false;
     $('reset').textContent = 'Сбросить день';
-    ST = { events: [], over: {} };
+    ST = newST([]);
     startHM = null; editing = null;
     save();
     renderToday();
@@ -780,8 +899,9 @@ body { margin: 0; }
       var awake = 0, nap = 0, bars = '', det = '', night = rows[rows.length - 1];
       rows.forEach(function (r) {
         if (r.type === 'night') {
-          det += '<li class="row"><div><div class="rtitle">Ночной сон</div><div class="rtime">' + hm(r.start) + (e.nightEnd ? ' – ' + hm(e.nightEnd) : '') + '</div></div>' +
-            '<div class="rdur">' + (e.nightEnd ? fmtMs(e.nightEnd - r.start) : '') + '</div></li>';
+          var enw = e.nw || [], eqw = e.qw || [], est = nwStats(enw, e.nightEnd || r.start);
+          det += '<li class="row"><div><div class="rtitle">Ночной сон</div><div class="rtime">' + hm(r.start) + (e.nightEnd ? ' – ' + hm(e.nightEnd) : '') + '</div>' + quickLine(eqw) + nwLines(enw, e.nightEnd || r.start, '…') + '</div>' +
+            '<div class="rdur">' + (e.nightEnd ? fmtMs(e.nightEnd - r.start) : '') + (est.cnt ? '<small>не спал ' + fmtMs(est.tot) + '</small>' : '') + '</div></li>';
           return;
         }
         var d = r.end - r.start;
@@ -802,7 +922,7 @@ body { margin: 0; }
       html += '<details class="day"><summary>' +
         '<div class="day-h"><b>' + ds + '</b><span>дневной сон ' + fmtMs(nap) + '</span></div>' +
         '<div class="sbar" role="img" aria-label="Бодрствование и сон за день">' + ticksHtml + bars + '</div>' +
-        '<div class="day-s">Подъём ' + hm(e.ev[0]) + ' · бодрствование ' + fmtMs(awake) + ' · ночной сон с ' + hm(night.start) + '</div>' +
+        '<div class="day-s">Подъём ' + hm(e.ev[0]) + ' · бодрствование ' + fmtMs(awake) + ' · ночной сон с ' + hm(night.start) + ((nightText(e.qw || [], e.nw || [], e.nightEnd || night.start)) ? ' · ночью: ' + nightText(e.qw || [], e.nw || [], e.nightEnd || night.start) : '') + '</div>' +
         '</summary><ul class="day-d">' + det + '</ul></details>';
     });
     var n = AR.length;
@@ -1086,6 +1206,8 @@ body { margin: 0; }
   }
   function tick() {
     if (view !== 'today' || !ST.events.length) return;
+    var bx = $('actTime');
+    if (bx && !actTouched && document.activeElement !== bx) { actHM = hm(Date.now()); bx.value = actHM; }
     renderHero();
     renderTimeline();
   }
@@ -1096,6 +1218,9 @@ body { margin: 0; }
     switch (t.dataset.act) {
       case 'tab': setView(t.dataset.v); break;
       case 'press': press(); break;
+      case 'night-wake': nightWake(); break;
+      case 'night-quick': nightQuick(); break;
+      case 'night-morning': nightMorning(); break;
       case 'undo': undo(); break;
       case 'nudge': nudge(+t.dataset.d); break;
       case 'nudge-reset': nudgeReset(); break;
@@ -1103,7 +1228,7 @@ body { margin: 0; }
       case 'sync-off': syncOff(); break;
       case 'sync-copy': copyText(shareLink(), t); break;
       case 'sync-copy-code': copyText(codeStr(), t); break;
-      case 'when-toggle': whenOpen = !whenOpen; actHM = null; renderAct(); break;
+      case 'when-toggle': whenOpen = !whenOpen; actHM = null; actTouched = false; renderAct(); break;
       case 'missed-toggle': missedOpen = !missedOpen; renderMissed(); break;
       case 'missed-add': missedAdd(); break;
       case 'missed-cancel': missedOpen = false; renderMissed(); break;
@@ -1139,7 +1264,7 @@ body { margin: 0; }
     else if (t.id === 'remLead') { S.remind.lead = +t.value; save(); }
     else if (t.id === 'remName') { S.remind.name = t.value.trim().slice(0, 20); save(); }
   });
-  document.addEventListener('input', function (e) { if (e.target.id === 'actTime') actHM = e.target.value; });
+  document.addEventListener('input', function (e) { if (e.target.id === 'actTime') { actHM = e.target.value; actTouched = true; } });
   window.addEventListener('pageshow', function () { tick(); syncResume(); });
   window.addEventListener('focus', function () { tick(); syncResume(); });
   document.addEventListener('visibilitychange', function () { if (!document.hidden) { tick(); syncResume(); } });
